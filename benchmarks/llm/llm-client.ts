@@ -3,7 +3,11 @@ import type { Tool as AnthropicTool } from "@anthropic-ai/sdk/resources/messages
 import OpenAI from "openai";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const openai    = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+let _openai: OpenAI | null = null;
+function getOpenAI(): OpenAI {
+  if (!_openai) _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  return _openai;
+}
 
 export type Provider = "anthropic" | "openai";
 
@@ -109,7 +113,7 @@ async function callOpenAI(
   maxTokens = 1024,
 ): Promise<LLMResponse> {
   const t0 = Date.now();
-  const response = await openai.chat.completions.create({
+  const response = await getOpenAI().chat.completions.create({
     model,
     max_tokens: maxTokens,
     tools: [OPENAI_TOOL],
