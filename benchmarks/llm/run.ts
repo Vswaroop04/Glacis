@@ -5,8 +5,6 @@ import { NormalizedEventSchema, type NormalizedEvent } from "./schemas.js";
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// ─── Prompt ──────────────────────────────────────────────────────────────────
-
 const SYSTEM_PROMPT = `You are a logistics data normalization engine for a supply chain platform.
 
 You receive arbitrary JSON webhook payloads from external vendors and must:
@@ -31,6 +29,9 @@ Rules:
 - amount_cents: parse European number formats (24.350,75 = 2435075 cents). Never use floats.
 - currency: extract ISO 4217 code (EUR, USD, etc.)
 - If a field is genuinely absent from the payload, use null — never invent values`;
+
+const CLASSIFY_SYSTEM = `Classify this vendor webhook into: SHIPMENT, INVOICE, or UNCLASSIFIED.
+Return JSON only: { "event_type": "SHIPMENT"|"INVOICE"|"UNCLASSIFIED", "confidence": "HIGH"|"MEDIUM"|"LOW" }`;
 
 const NORMALIZE_TOOL: Tool = {
   name: "normalize_webhook",
@@ -65,8 +66,6 @@ const NORMALIZE_TOOL: Tool = {
     required: ["event_type"],
   },
 };
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 type SystemBlock = { type: "text"; text: string; cache_control?: { type: "ephemeral" } };
 
@@ -111,7 +110,31 @@ function cacheTokens(response: Message) {
   };
 }
 
-function ms(n: number) { return `${n.toFixed(0)}ms`; }
+function percentile(sorted: number[], p: number): number {
+  const idx = Math.min(Math.floor(sorted.length * p), sorted.length - 1);
+  return sorted[idx] ?? 0;
+}
+
+function stddev(values: number[]): number {
+  const avg = values.reduce((s, v) => s + v, 0) / values.length;
+  return Math.sqrt(values.reduce((s, v) => s + (v - avg) ** 2, 0) / values.length);
+}
+
+function latencyStats(ms: number[]) {
+  const sorted = [...ms].sort((a, b) => a - b);
+  return {
+    min: sorted[0] ?? 0,
+    p50: percentile(sorted, 0.5),
+    p75: percentile(sorted, 0.75),
+    p95: percentile(sorted, 0.95),
+    p99: percentile(sorted, 0.99),
+    max: sorted[sorted.length - 1] ?? 0,
+    avg: ms.reduce((s, v) => s + v, 0) / ms.length,
+    stddev: stddev(ms),
+  };
+}
+
+function fms(n: number) { return `${n.toFixed(0)}ms`; }
 
 function printTable(rows: Record<string, string | number>[]) {
   if (rows.length === 0) return;
@@ -130,10 +153,24 @@ function printTable(rows: Record<string, string | number>[]) {
   console.log(bar("└", "┴", "┘"));
 }
 
-// ─── Benchmark A: Single-call accuracy per model ─────────────────────────────
+function printStats(label: string, latencies: number[]) {
+  const s = latencyStats(latencies);
+  console.log(`\n${label} latency stats (n=${latencies.length})`);
+  printTable([{
+    min: fms(s.min),
+    p50: fms(s.p50),
+    p75: fms(s.p75),
+    p95: fms(s.p95),
+    p99: fms(s.p99),
+    max: fms(s.max),
+    avg: fms(s.avg),
+    stddev: fms(s.stddev),
+  }]);
+}
 
 async function benchmarkSingleCall(model: string) {
   const rows: Record<string, string | number>[] = [];
+  const latencies: number[] = [];
 
   for (const payload of payloads) {
     const t0 = Date.now();
@@ -152,42 +189,44 @@ async function benchmarkSingleCall(model: string) {
       ({ cacheRead, cacheWrite } = cacheTokens(response));
       const parsed = NormalizedEventSchema.safeParse(extractToolInput(response));
       if (parsed.success) result = parsed.data;
-    } catch (_) {}
+    } catch (e) { console.error(`  [${payload.id}] LLM call failed:`, (e as Error).message); }
 
-    const latencyMs = Date.now() - t0;
+    const elapsed = Date.now() - t0;
+    latencies.push(elapsed);
+
     const gotType = result?.event_type ?? "?";
-    const gotState = result && result.event_type !== "UNCLASSIFIED" ? (result as Record<string, unknown>)["canonical_state"] as string : "-";
+    const gotState = result && result.event_type !== "UNCLASSIFIED"
+      ? (result as Record<string, unknown>)["canonical_state"] as string
+      : "-";
     const typeOk = gotType === payload.expectedType;
     const stateOk = payload.expectedState === null ? gotState === "-" : gotState === payload.expectedState;
 
     rows.push({
-      payload: payload.id.slice(0, 20),
+      payload: payload.id.slice(0, 22),
       want: `${payload.expectedType}/${payload.expectedState ?? "-"}`,
       got: `${gotType}/${gotState}`,
       "T✓": typeOk ? "✓" : "✗",
       "S✓": stateOk ? "✓" : "✗",
-      latency: ms(latencyMs),
+      "parse✓": result !== null ? "✓" : "✗",
+      "ms": elapsed,
       in_tok: inTok,
       out_tok: outTok,
       cache_r: cacheRead,
       cache_w: cacheWrite,
     });
   }
-  return rows;
+
+  return { rows, latencies };
 }
-
-// ─── Benchmark B: One-call vs two-call ───────────────────────────────────────
-
-const CLASSIFY_SYSTEM = `Classify this vendor webhook into: SHIPMENT, INVOICE, or UNCLASSIFIED.
-Return JSON only: { "event_type": "SHIPMENT"|"INVOICE"|"UNCLASSIFIED", "confidence": "HIGH"|"MEDIUM"|"LOW" }`;
 
 async function benchmarkOneVsTwo(model: string) {
   const rows: Record<string, string | number>[] = [];
+  const oneLatencies: number[] = [];
+  const twoLatencies: number[] = [];
 
   for (const payload of payloads) {
-    // One call
     const t1s = Date.now();
-    let oneCallOk = false;
+    let oneOk = false;
     try {
       const r = await callLLM({
         model,
@@ -195,13 +234,13 @@ async function benchmarkOneVsTwo(model: string) {
         tools: [NORMALIZE_TOOL],
         messages: [{ role: "user", content: `Normalize this vendor webhook:\n\n${JSON.stringify(payload.body, null, 2)}` }],
       });
-      oneCallOk = NormalizedEventSchema.safeParse(extractToolInput(r)).success;
-    } catch (_) {}
+      oneOk = NormalizedEventSchema.safeParse(extractToolInput(r)).success;
+    } catch (e) { console.error(`  [${payload.id}] 1-call failed:`, (e as Error).message); }
     const oneMs = Date.now() - t1s;
+    oneLatencies.push(oneMs);
 
-    // Two calls
     const t2s = Date.now();
-    let twoCallOk = false;
+    let twoOk = false;
     try {
       const r1 = await callLLM({
         model,
@@ -209,36 +248,36 @@ async function benchmarkOneVsTwo(model: string) {
         messages: [{ role: "user", content: JSON.stringify(payload.body) }],
         maxTokens: 128,
       });
-      const classText = extractText(r1);
-      const cls = JSON.parse(classText) as { event_type: string };
-
+      const cls = JSON.parse(extractText(r1)) as { event_type: string };
       const r2 = await callLLM({
         model,
         system: buildSystem(SYSTEM_PROMPT, true),
         tools: [NORMALIZE_TOOL],
         messages: [{ role: "user", content: `Pre-classified as: ${cls.event_type}\n\n${JSON.stringify(payload.body, null, 2)}` }],
       });
-      twoCallOk = NormalizedEventSchema.safeParse(extractToolInput(r2)).success;
-    } catch (_) {}
+      twoOk = NormalizedEventSchema.safeParse(extractToolInput(r2)).success;
+    } catch (e) { console.error(`  [${payload.id}] 2-call failed:`, (e as Error).message); }
     const twoMs = Date.now() - t2s;
+    twoLatencies.push(twoMs);
 
     rows.push({
-      payload: payload.id.slice(0, 20),
-      "1-call ms": ms(oneMs),
-      "1-call ok": oneCallOk ? "✓" : "✗",
-      "2-call ms": ms(twoMs),
-      "2-call ok": twoCallOk ? "✓" : "✗",
-      winner: oneMs < twoMs ? "1-call faster" : "2-call faster",
+      payload: payload.id.slice(0, 22),
+      "1-call ms": oneMs,
+      "1-call ok": oneOk ? "✓" : "✗",
+      "2-call ms": twoMs,
+      "2-call ok": twoOk ? "✓" : "✗",
+      faster: oneMs < twoMs ? "1-call" : "2-call",
+      "delta ms": Math.abs(oneMs - twoMs),
     });
   }
-  return rows;
-}
 
-// ─── Benchmark C: Prompt cache warmup ────────────────────────────────────────
+  return { rows, oneLatencies, twoLatencies };
+}
 
 async function benchmarkCache(model: string, runs = 6) {
   const payload = payloads[0];
   const rows: Record<string, string | number>[] = [];
+  const latencies: number[] = [];
 
   for (let i = 1; i <= runs; i++) {
     const t0 = Date.now();
@@ -248,22 +287,22 @@ async function benchmarkCache(model: string, runs = 6) {
       tools: [NORMALIZE_TOOL],
       messages: [{ role: "user", content: `Normalize this vendor webhook:\n\n${JSON.stringify(payload.body, null, 2)}` }],
     });
-    const latencyMs = Date.now() - t0;
+    const elapsed = Date.now() - t0;
+    latencies.push(elapsed);
     const { cacheRead, cacheWrite } = cacheTokens(response);
     rows.push({
       run: i,
-      latency: ms(latencyMs),
+      "ms": elapsed,
       cache_read_tok: cacheRead,
       cache_write_tok: cacheWrite,
-      status: cacheRead > 0 ? "WARM ✓" : "COLD (miss)",
+      status: cacheRead > 0 ? "WARM ✓" : "COLD",
     });
   }
-  return rows;
+
+  return { rows, latencies };
 }
 
-// ─── Benchmark D: Reliability — N runs on hardest payload ────────────────────
-
-async function benchmarkReliability(model: string, payloadId: string, runs = 5) {
+async function benchmarkReliability(model: string, payloadId: string, runs: number) {
   const payload = payloads.find((p) => p.id === payloadId)!;
   const latencies: number[] = [];
   let parseOk = 0, typeOk = 0, stateOk = 0;
@@ -282,68 +321,94 @@ async function benchmarkReliability(model: string, payloadId: string, runs = 5) 
       if (parsed.success) {
         parseOk++;
         if (parsed.data.event_type === payload.expectedType) typeOk++;
-        const state = parsed.data.event_type !== "UNCLASSIFIED" ? (parsed.data as Record<string, unknown>)["canonical_state"] : null;
+        const state = parsed.data.event_type !== "UNCLASSIFIED"
+          ? (parsed.data as Record<string, unknown>)["canonical_state"]
+          : null;
         if (state === (payload.expectedState ?? null)) stateOk++;
       }
-    } catch (_) { latencies.push(Date.now() - t0); }
+    } catch (e) { console.error(`  [${payloadId} run ${i + 1}] failed:`, (e as Error).message); latencies.push(Date.now() - t0); }
   }
 
-  const sorted = [...latencies].sort((a, b) => a - b);
+  const s = latencyStats(latencies);
   const pct = (n: number) => `${((n / runs) * 100).toFixed(0)}%`;
+
   return {
     model: model.includes("haiku") ? "Haiku 4.5" : "Sonnet 4.6",
-    payload: payloadId,
+    payload: payloadId.slice(0, 18),
     runs,
     "parse%": pct(parseOk),
     "type%": pct(typeOk),
     "state%": pct(stateOk),
-    p50: ms(sorted[Math.floor(sorted.length * 0.5)] ?? 0),
-    p95: ms(sorted[Math.floor(sorted.length * 0.95)] ?? 0),
-    min: ms(sorted[0] ?? 0),
-    max: ms(sorted[sorted.length - 1] ?? 0),
+    "min": fms(s.min),
+    "p50": fms(s.p50),
+    "p75": fms(s.p75),
+    "p95": fms(s.p95),
+    "p99": fms(s.p99),
+    "max": fms(s.max),
+    "stddev": fms(s.stddev),
   };
 }
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
-
 async function main() {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.error("ANTHROPIC_API_KEY is not set. Export it before running:\n  export ANTHROPIC_API_KEY=sk-ant-...");
+    process.exit(1);
+  }
+
   const haiku = "claude-haiku-4-5-20251001";
   const sonnet = "claude-sonnet-4-6";
 
-  console.log("\n╔══════════════════════════════════════════════════════════════╗");
-  console.log("║         GLACIS — LLM Normalization Benchmark                  ║");
-  console.log("╚══════════════════════════════════════════════════════════════╝");
+  console.log("\nGlacis - LLM Normalization Benchmark");
+  console.log(`Started: ${new Date().toISOString()}\n`);
 
-  // A. Accuracy per model
+  console.log("Benchmark A: Single-call accuracy per model");
+  console.log("Each payload sent once. Measures classification + normalization correctness and latency.\n");
+
   for (const [model, name] of [[haiku, "Haiku 4.5"], [sonnet, "Sonnet 4.6"]] as const) {
-    console.log(`\n━━━ A. Single-call accuracy [${name}] ━━━\n`);
-    const rows = await benchmarkSingleCall(model);
+    console.log(`  ${name}`);
+    const { rows, latencies } = await benchmarkSingleCall(model);
     printTable(rows);
+
     const typeAcc = rows.filter((r) => r["T✓"] === "✓").length / rows.length * 100;
     const stateAcc = rows.filter((r) => r["S✓"] === "✓").length / rows.length * 100;
-    const avgMs = rows.reduce((s, r) => s + parseInt(String(r.latency)), 0) / rows.length;
-    console.log(`\ntype_accuracy=${typeAcc.toFixed(0)}%  state_accuracy=${stateAcc.toFixed(0)}%  avg_latency≈${avgMs.toFixed(0)}ms`);
+    const parseAcc = rows.filter((r) => r["parse✓"] === "✓").length / rows.length * 100;
+    console.log(`  type_accuracy=${typeAcc.toFixed(0)}%  state_accuracy=${stateAcc.toFixed(0)}%  parse_ok=${parseAcc.toFixed(0)}%`);
+    printStats(`  ${name}`, latencies);
+    console.log();
   }
 
-  // B. One-call vs two-call
-  console.log(`\n━━━ B. One-call vs Two-call [Sonnet 4.6] ━━━\n`);
-  const oneVsTwo = await benchmarkOneVsTwo(sonnet);
-  printTable(oneVsTwo);
+  console.log("\nBenchmark B: One-call vs Two-call strategy");
+  console.log("One-call: classify + normalize in a single LLM call.");
+  console.log("Two-call: classify first, then normalize with type context injected.\n");
 
-  // C. Cache warmup
-  console.log(`\n━━━ C. Prompt cache warmup — 6 runs [Sonnet 4.6] ━━━\n`);
-  console.log("Run 1 = cold write. Runs 2+ = should hit cache.\n");
-  const cacheRows = await benchmarkCache(sonnet, 6);
-  printTable(cacheRows);
-  const coldMs = parseInt(String(cacheRows[0].latency));
-  const warmAvg = cacheRows.slice(1).reduce((s, r) => s + parseInt(String(r.latency)), 0) / (cacheRows.length - 1);
-  const saving = (((coldMs - warmAvg) / coldMs) * 100).toFixed(1);
-  console.log(`\ncache_speedup: ${coldMs}ms cold → ${warmAvg.toFixed(0)}ms warm (${saving}% faster)`);
+  const { rows: bRows, oneLatencies, twoLatencies } = await benchmarkOneVsTwo(sonnet);
+  printTable(bRows);
 
-  // D. Reliability on hardest payloads
-  console.log(`\n━━━ D. Reliability — 5 runs per hard payload ━━━`);
-  console.log(`\n"gfp-invoice-paid" tests European number parsing (EUR 24.350,75 → 2435075 cents)`);
-  console.log(`"one-delivered" tests ambiguous milestone text\n`);
+  const oneS = latencyStats(oneLatencies);
+  const twoS = latencyStats(twoLatencies);
+  printTable([
+    { strategy: "1-call", min: fms(oneS.min), p50: fms(oneS.p50), p75: fms(oneS.p75), p95: fms(oneS.p95), p99: fms(oneS.p99), max: fms(oneS.max), avg: fms(oneS.avg), stddev: fms(oneS.stddev) },
+    { strategy: "2-call", min: fms(twoS.min), p50: fms(twoS.p50), p75: fms(twoS.p75), p95: fms(twoS.p95), p99: fms(twoS.p99), max: fms(twoS.max), avg: fms(twoS.avg), stddev: fms(twoS.stddev) },
+  ]);
+
+  console.log("\nBenchmark C: Prompt cache warmup");
+  console.log("Run 1 = cold (cache write). Runs 2-6 = should read from cache.");
+  console.log("Cache hits cut input token cost ~90% and reduce latency.\n");
+
+  const { rows: cRows, latencies: cLatencies } = await benchmarkCache(sonnet, 6);
+  printTable(cRows);
+
+  const coldMs = cLatencies[0]!;
+  const warmLatencies = cLatencies.slice(1);
+  const warmS = latencyStats(warmLatencies);
+  const saving = (((coldMs - warmS.avg) / coldMs) * 100).toFixed(1);
+  console.log(`\n  cold=${fms(coldMs)}  warm_avg=${fms(warmS.avg)}  speedup=${saving}%`);
+  printStats("  Warm runs", warmLatencies);
+
+  console.log("\nBenchmark D: Reliability — repeated runs on hard payloads");
+  console.log("gfp-invoice-paid : European number format  EUR 24.350,75 -> 2435075 cents");
+  console.log("one-delivered    : Ambiguous milestone text requiring semantic mapping\n");
+
   const relRows = await Promise.all([
     benchmarkReliability(haiku, "gfp-invoice-paid", 5),
     benchmarkReliability(sonnet, "gfp-invoice-paid", 5),
@@ -352,7 +417,7 @@ async function main() {
   ]);
   printTable(relRows);
 
-  console.log("\n━━━ Benchmark complete ━━━\n");
+  console.log(`\nBenchmark complete: ${new Date().toISOString()}\n`);
 }
 
 main().catch((e) => {
