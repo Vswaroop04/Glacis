@@ -1,0 +1,20 @@
+{
+  "name": "glacis",
+  "version": "1.0.0",
+  "description": "AI webhook ingestion service",
+  "main": "index.js",
+  "scripts": {
+    "bench:llm": "tsx benchmarks/llm/run.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "@anthropic-ai/sdk": "^0.100.0",
+    "@types/node": "^25.9.1",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3",
+    "zod": "^4.4.3"
+  }
+}
