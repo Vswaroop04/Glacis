@@ -9,9 +9,9 @@ export const ShipmentEventSchema = z.object({
     scac: z.string().nullable(),
     name: z.string().nullable(),
   }),
-  container_no: z.string().nullable(),
-  origin_port: z.object({ locode: z.string(), name: z.string() }).nullable(),
-  vessel: z.object({ name: z.string(), imo: z.string().nullable() }).nullable(),
+  container_no: z.string().nullish(),
+  origin_port: z.object({ locode: z.string(), name: z.string() }).nullish(),
+  vessel: z.object({ name: z.string(), imo: z.string().nullish() }).nullish(),
   raw_milestone_text: z.string().describe("Original vendor milestone text, unmodified"),
 });
 
@@ -22,8 +22,8 @@ export const InvoiceEventSchema = z.object({
   event_timestamp: z.string().describe("ISO 8601 UTC timestamp of the financial event"),
   amount_cents: z.number().int().describe("Amount in smallest currency unit, e.g. EUR cents"),
   currency: z.string().length(3).describe("ISO 4217 currency code"),
-  carrier: z.string().nullable(),
-  linked_bl: z.string().nullable().describe("Associated Bill of Lading if present"),
+  carrier: z.string().nullish(),
+  linked_bl: z.string().nullish().describe("Associated Bill of Lading if present"),
   raw_transaction_kind: z.string().describe("Original vendor transaction kind string, unmodified"),
 });
 
