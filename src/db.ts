@@ -21,11 +21,12 @@ CREATE TABLE IF NOT EXISTS raw_events (
   received_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Semantic idempotency: the same logical event from a vendor is deduped even if
--- the raw bytes differ slightly. Exact-byte dedup is already covered by the PK.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_raw_vendor_event
-  ON raw_events (vendor, vendor_event_id)
-  WHERE vendor_event_id IS NOT NULL;
+-- Idempotency is the body hash (the PK): identical retries collapse to one row,
+-- while different lifecycle events of the same entity (e.g. invoice ISSUED then
+-- PAID share a doc_ref but differ in body) stay distinct. vendor/vendor_event_id
+-- are kept as queryable metadata only, never as a dedup key.
+DROP INDEX IF EXISTS uq_raw_vendor_event;
+CREATE INDEX IF NOT EXISTS ix_raw_vendor_event ON raw_events (vendor, vendor_event_id);
 
 CREATE TABLE IF NOT EXISTS normalized_events (
   id                BIGGSERIAL PRIMARY KEY,

@@ -4,11 +4,11 @@ import { createHash } from "node:crypto";
  * Derive the idempotency identity of an incoming webhook.
  *
  * id  : SHA-256 of the canonical raw body (stable regardless of key order), or an
- *       explicit Idempotency-Key header if the vendor sent one. This is the
- *       primary dedup key — identical retries collapse to the same row + job.
- * vendor / vendorEventId : a cheap, deterministic guess at the logical event from
- *       common field names, used for the secondary semantic unique index. Best
- *       effort — null when we can't tell, in which case hash dedup still applies.
+ *       explicit Idempotency-Key header if the vendor sent one. This is the only
+ *       dedup key — identical retries collapse to the same row + job, while
+ *       different events of one entity (invoice ISSUED vs PAID) hash differently.
+ * vendor / vendorEventId : a cheap, deterministic guess from common field names,
+ *       kept as queryable metadata only (not used for dedup).
  */
 export interface Identity {
   id: string;
