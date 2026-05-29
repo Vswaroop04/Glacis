@@ -4,7 +4,10 @@
   "description": "AI webhook ingestion service",
   "main": "index.js",
   "scripts": {
-    "bench:llm": "tsx benchmarks/llm/run.ts"
+    "bench:llm": "tsx benchmarks/llm/run.ts",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts"
   },
   "keywords": [],
   "author": "",
@@ -13,10 +16,17 @@
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.100.0",
     "@types/node": "^25.9.1",
+    "@types/pg": "^8.20.0",
     "dotenv": "^17.4.2",
     "openai": "^6.39.1",
     "tsx": "^4.22.3",
     "typescript": "^6.0.3",
     "zod": "^4.4.3"
+  },
+  "dependencies": {
+    "bullmq": "^5.77.6",
+    "fastify": "^5.8.5",
+    "ioredis": "^5.11.0",
+    "pg": "^8.21.0"
   }
 }
