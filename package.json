@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "bench:llm": "tsx benchmarks/llm/run.ts",
+    "bench:geo": "tsx benchmarks/geo/run.ts",
     "typecheck": "tsc --noEmit",
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts"
