@@ -32,8 +32,10 @@ async function process(job: Job<NormalizeJob>): Promise<void> {
 
   let needsReview = confidence != null && confidence < config.reviewConfidenceThreshold;
 
-  // geo enrichment (best-effort; never fails the job)
+  // deterministic + geo enrichment (best-effort; never fails the job)
   const enriched = enrichEvent(handled.event, staticLocodeProvider);
+  // a container number that fails its ISO 6346 check digit is likely corrupted
+  if (enriched.containerValid === false) needsReview = true;
 
   if (handled.snapshot) {
     const snap = await getSnapshot(handled.snapshot.entityId);

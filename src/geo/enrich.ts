@@ -1,5 +1,7 @@
 import type { GeoProvider } from "./provider.js";
 import { modeDistanceKm, estimateEta } from "../enrich/distance.js";
+import { carrierFromScac } from "../enrich/carriers.js";
+import { isValidContainerNumber } from "../enrich/container.js";
 import type { NormalizedEvent, GeoPoint, Route, TransportMode } from "../schemas.js";
 
 export type EnrichmentStatus = "DONE" | "PARTIAL" | "SKIPPED" | "FAILED";
@@ -8,6 +10,7 @@ export interface EnrichResult {
   event: NormalizedEvent;
   status: EnrichmentStatus;
   point: GeoPoint | null; // resolved location of this event, for route assembly
+  containerValid: boolean | null; // ISO 6346 check; null when no container number
 }
 
 /**
@@ -17,16 +20,24 @@ export interface EnrichResult {
  */
 export function enrichEvent(event: NormalizedEvent, provider: GeoProvider): EnrichResult {
   if (event.event_type !== "SHIPMENT") {
-    return { event, status: "SKIPPED", point: null };
+    return { event, status: "SKIPPED", point: null, containerValid: null };
   }
   try {
-    const point = provider.resolve(event.event_locode, event.event_location_name);
-    if (!point) return { event, status: "SKIPPED", point: null };
-    const enriched: NormalizedEvent = { ...event, event_location: point };
-    const status: EnrichmentStatus = point.source === "LOCODE_DB" ? "DONE" : "PARTIAL";
-    return { event: enriched, status, point };
+    let e = event;
+    // backfill carrier name from SCAC when the vendor only sent a code
+    if (e.carrier && e.carrier.name == null && e.carrier.scac) {
+      const name = carrierFromScac(e.carrier.scac);
+      if (name) e = { ...e, carrier: { ...e.carrier, name } };
+    }
+    // validate the container number's ISO 6346 check digit, if present
+    const containerValid = e.container_no ? isValidContainerNumber(e.container_no) : null;
+
+    const point = provider.resolve(e.event_locode, e.event_location_name);
+    const enriched: NormalizedEvent = point ? { ...e, event_location: point } : e;
+    const status: EnrichmentStatus = !point ? "SKIPPED" : point.source === "LOCODE_DB" ? "DONE" : "PARTIAL";
+    return { event: enriched, status, point: point ?? null, containerValid };
   } catch {
-    return { event, status: "FAILED", point: null };
+    return { event, status: "FAILED", point: null, containerValid: null };
   }
 }
 
