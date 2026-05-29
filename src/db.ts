@@ -157,10 +157,9 @@ export async function applySnapshot(args: {
          THEN EXCLUDED.canonical_state ELSE entity_snapshots.canonical_state END,
        last_event_timestamp = GREATEST(
          entity_snapshots.last_event_timestamp, EXCLUDED.last_event_timestamp),
-       route = CASE
-         WHEN EXCLUDED.route IS NOT NULL
-              AND EXCLUDED.last_event_timestamp >= entity_snapshots.last_event_timestamp
-         THEN EXCLUDED.route ELSE entity_snapshots.route END,
+       -- route is derived from the entity's full history, so the freshest
+       -- computation is always the most complete; take it whenever present
+       route = COALESCE(EXCLUDED.route, entity_snapshots.route),
        event_count = entity_snapshots.event_count + 1,
        updated_at = now()`,
     [
