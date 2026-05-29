@@ -13,14 +13,14 @@ import { z } from "zod";
  * deterministically-resolved data.
  */
 
-// ───────────────────────── Canonical state enums ─────────────────────────
+// canonical state enums
 export const SHIPMENT_STATES = ["PICKED_UP", "IN_TRANSIT", "OUT_FOR_DELIVERY", "DELIVERED"] as const;
 export const INVOICE_STATES = ["ISSUED", "PAID", "VOIDED", "REFUNDED"] as const;
 
 export const ShipmentState = z.enum(SHIPMENT_STATES);
 export const InvoiceState = z.enum(INVOICE_STATES);
 
-// ───────────────────────── Geo primitives (enrichment) ─────────────────────────
+// geo primitives, filled in by enrichment
 export const GeoPoint = z.object({
   locode: z.string().nullable(),                 // UN/LOCODE, e.g. "CNSHA" — LLM-extracted
   name: z.string().nullable(),                   // "Shanghai" — LLM-extracted
@@ -39,7 +39,7 @@ export const Route = z.object({
 });
 export type Route = z.infer<typeof Route>;
 
-// ───────────────────── Tier 1: what the LLM must return ─────────────────────
+// tier 1: what the LLM must return
 export const ShipmentLLM = z.object({
   event_type: z.literal("SHIPMENT"),
   entity_id: z.string().describe("master BL > house BL > container number"),
@@ -78,8 +78,9 @@ export const LLMOutputSchema = z.discriminatedUnion("event_type", [
 export type LLMOutput = z.infer<typeof LLMOutputSchema>;
 export type ShipmentLLM = z.infer<typeof ShipmentLLM>;
 export type InvoiceLLM = z.infer<typeof InvoiceLLM>;
+export type UnclassifiedLLM = z.infer<typeof UnclassifiedLLM>;
 
-// ──────────────── Tier 2: enriched, stored & served record ────────────────
+// tier 2: enriched, stored and served record
 export const EnrichedShipment = ShipmentLLM.extend({
   event_location: GeoPoint.nullable(),           // enrichment resolves event_locode
 });
@@ -103,7 +104,7 @@ export const NormalizedRecord = z.object({
 });
 export type NormalizedRecord = z.infer<typeof NormalizedRecord>;
 
-// ───────────────────────── Entity snapshot (derived head state) ─────────────────────────
+// entity snapshot: derived head state
 export const EntitySnapshot = z.object({
   entity_id: z.string(),
   event_type: z.enum(["SHIPMENT", "INVOICE"]),
