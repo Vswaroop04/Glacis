@@ -18,7 +18,7 @@ export interface EnrichResult {
  * throws into the caller — a geocoder failure or an unknown port must not fail
  * or delay normalization, so problems become a FAILED/SKIPPED status instead.
  */
-export function enrichEvent(event: NormalizedEvent, provider: GeoProvider): EnrichResult {
+export async function enrichEvent(event: NormalizedEvent, provider: GeoProvider): Promise<EnrichResult> {
   if (event.event_type !== "SHIPMENT") {
     return { event, status: "SKIPPED", point: null, containerValid: null };
   }
@@ -32,9 +32,11 @@ export function enrichEvent(event: NormalizedEvent, provider: GeoProvider): Enri
     // validate the container number's ISO 6346 check digit, if present
     const containerValid = e.container_no ? isValidContainerNumber(e.container_no) : null;
 
-    const point = provider.resolve(e.event_locode, e.event_location_name);
+    const point = await provider.resolve(e.event_locode, e.event_location_name);
     const enriched: NormalizedEvent = point ? { ...e, event_location: point } : e;
-    const status: EnrichmentStatus = !point ? "SKIPPED" : point.source === "LOCODE_DB" ? "DONE" : "PARTIAL";
+    const status: EnrichmentStatus =
+      !point || point.source === "UNRESOLVED" ? (point ? "PARTIAL" : "SKIPPED")
+      : point.source === "LOCODE_DB" || point.source === "GEOCODER" ? "DONE" : "PARTIAL";
     return { event: enriched, status, point: point ?? null, containerValid };
   } catch {
     return { event, status: "FAILED", point: null, containerValid: null };

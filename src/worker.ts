@@ -4,7 +4,7 @@ import { connection, type NormalizeJob } from "./queue.js";
 import { normalize } from "./normalize.js";
 import { handle } from "./handlers/index.js";
 import { evaluateTransition, isAnomalous } from "./state-machine.js";
-import { staticLocodeProvider } from "./geo/provider.js";
+import { geoProvider } from "./geo/live.js";
 import { enrichEvent, assembleRoute, type RouteLeg } from "./geo/enrich.js";
 import {
   getRawEvent, setRawStatus, insertNormalizedEvent, applySnapshot,
@@ -33,7 +33,7 @@ async function process(job: Job<NormalizeJob>): Promise<void> {
   let needsReview = confidence != null && confidence < config.reviewConfidenceThreshold;
 
   // deterministic + geo enrichment (best-effort; never fails the job)
-  const enriched = enrichEvent(handled.event, staticLocodeProvider);
+  const enriched = await enrichEvent(handled.event, geoProvider);
   // a container number that fails its ISO 6346 check digit is likely corrupted
   if (enriched.containerValid === false) needsReview = true;
 

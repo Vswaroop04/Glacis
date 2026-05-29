@@ -2,16 +2,18 @@ import { LOCODES } from "./locodes.js";
 import type { GeoPoint } from "../schemas.js";
 
 /**
- * Resolving a LOCODE to coordinates is deterministic work, kept behind this
- * interface so the static table can be swapped for a live geocoder (Google,
- * Mapbox) or a full LOCODE dataset without touching the enrichment logic.
+ * Resolving a location to coordinates, kept behind this interface so the static
+ * LOCODE table can be composed with a live geocoder (see geo/live.ts) or swapped
+ * for a full dataset without touching the enrichment logic. Async because live
+ * providers do network I/O.
  */
 export interface GeoProvider {
-  resolve(locode: string | null | undefined, name?: string | null): GeoPoint | null;
+  resolve(locode: string | null | undefined, name?: string | null): Promise<GeoPoint | null>;
 }
 
+// tier 1: exact, offline, deterministic for known ports
 export const staticLocodeProvider: GeoProvider = {
-  resolve(locode, name) {
+  async resolve(locode, name) {
     if (!locode) {
       if (!name) return null;
       return { locode: null, name, lat: null, lng: null, country: null, source: "UNRESOLVED" };

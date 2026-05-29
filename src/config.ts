@@ -20,4 +20,10 @@ export const config = {
 
   // Below this LLM-reported confidence, the event is flagged for human review.
   reviewConfidenceThreshold: Number(process.env.REVIEW_CONFIDENCE ?? 0.7),
+
+  // Live geocoder fallback (Photon primary, Nominatim fallback). Best-effort.
+  geocoderEnabled: process.env.GEOCODER_ENABLED !== "false",
+  geocoderTimeoutMs: Number(process.env.GEOCODER_TIMEOUT_MS ?? 2000),
+  photonUrl: process.env.PHOTON_URL ?? "https://photon.komoot.io/api",
+  nominatimUrl: process.env.NOMINATIM_URL ?? "https://nominatim.openstreetmap.org/search",
 } as const;
