@@ -59,7 +59,8 @@ async function process(job: Job<NormalizeJob>): Promise<void> {
       const loc = t.payload?.event_location ?? null;
       return { state: t.canonical_state, point: loc, ts: new Date(t.event_timestamp).toISOString() };
     });
-    const route = assembleRoute(legs);
+    const mode = enriched.event.event_type === "SHIPMENT" ? enriched.event.mode : "UNKNOWN";
+    const route = assembleRoute(legs, mode);
 
     await applySnapshot({
       entityId: handled.snapshot.entityId,
