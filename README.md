@@ -90,8 +90,20 @@ BullMQ retries with exponential backoff. **Attempt 1 uses Haiku (cheap, fast); r
 ### Rate limiting
 The worker has a configurable limiter (`max` jobs / interval) plus concurrency. The queue absorbs unlimited inbound traffic; the limiter only paces *consumption* so spikes don't trigger LLM-provider 429s.
 
-### Geo enrichment (best-effort)
-Shipment event locations (UN/LOCODE) are resolved to coordinates and a route distance is computed. This is **non-blocking**: an unknown port or a geocoder failure produces a `PARTIAL`/`FAILED` enrichment status but never fails normalization. The provider is behind a [`GeoProvider`](src/geo/provider.ts) interface — a static LOCODE table here, swappable for a live geocoder in production.
+### Enrichment — filling what vendors leave out (best-effort)
+Logistics webhooks routinely omit fields the platform needs. The system derives them deterministically after normalization. All of this is **non-blocking**: any failure produces a `PARTIAL`/`FAILED`/`SKIPPED` status and is never allowed to fail normalization.
+
+| Derived | How | Source of truth |
+|---|---|---|
+| Coordinates from a port code/name | static UN/LOCODE table → live geocoder fallback | [`geo/`](src/geo) |
+| Carrier name from a SCAC code | static SCAC registry (`MAEU`→Maersk) | [`enrich/carriers.ts`](src/enrich/carriers.ts) |
+| Container number validity | ISO 6346 check-digit; bad → `needs_review` | [`enrich/container.ts`](src/enrich/container.ts) |
+| Route distance + transit + ETA | mode-aware (sea/air/road), from resolved endpoints | [`enrich/distance.ts`](src/enrich/distance.ts) |
+
+**Geo resolution is two-tier.** A static LOCODE table is the *primary* (exact, offline, deterministic for known ports). A live **Photon→Nominatim** geocoder is the *fallback* for a port name with no code, or a road address — borrowed from the spotter-labs project's design, but global (no US bounding box). The [port geocoding benchmark](benchmarks/geo/README.md) shows *why* this ordering matters: freeform geocoding put "Port of Shanghai" ~9,000 km off, so the table must be primary and the geocoder labelled (`source: GEOCODER`) as best-effort only.
+
+### Multi-modal
+A shipment carries a `mode` (`SEA`/`AIR`/`ROAD`/`RAIL`/`PARCEL`), classified by the LLM. The lifecycle states are mode-agnostic, but enrichment is mode-aware: distance is a sea-lane approximation for `SEA`, an exact **great-circle for `AIR`**, and road routing for `ROAD`; ETA uses a per-mode speed. The sample payloads are all `SEA`, which is implemented end-to-end; `AIR` distance is correct out of the box; `ROAD` is wired through the same geocoder + a routing-provider interface (the spotter-labs ORS HGV stack is the production fit). This keeps the system from being locked to one transport mode.
 
 ---
 
@@ -143,7 +155,7 @@ curl localhost:3000/entities/MAEU240498712
 curl localhost:3000/metrics
 ```
 
-Scripts: `npm run typecheck`, `npm run bench:llm` (model comparison), and `scripts/smoke-*.ts` (db, normalize, state machine, geo).
+Scripts: `npm run typecheck`, `npm run bench:llm` (model comparison), `npm run bench:geo` (port geocoding), and `scripts/smoke-*.ts` (db, normalize, state machine, geo, enrich).
 
 ---
 
@@ -155,10 +167,12 @@ The default is **Haiku 4.5** with **Sonnet 4.6** as the retry fallback. This com
 
 ## Tradeoffs made for the time box
 
-- **Static LOCODE table + haversine** instead of a live geocoder + sea-route API. Ocean distance isn't a great circle; haversine is a labeled approximation, swappable via `GeoProvider`.
+- **Sea distance is a great-circle approximation**, not a true sea-lane distance (which follows shipping routes). It's labelled `SEA_ROUTE` and the distance layer is swappable for a sea-route provider (searoutes.com). Air distance is already exact (great-circle).
+- **Geo is a small static LOCODE table + a live geocoder fallback.** Production would use a full UN/LOCODE / World Port Index dataset; the geocoder is mainly for road addresses.
 - **In-process worker** rather than a separate worker deployment. The boundary (`startWorker`) is clean enough to split out.
 - **Polling-free BullMQ** keeps infra to Postgres + Redis (one `docker compose up`) rather than Kafka/Temporal.
 - **Confidence** is the model's self-report, not a calibrated score.
+- **AIR/ROAD enrichment is wired but not deep** — no sample payloads for those modes; SEA is the implemented path.
 
 ---
 
