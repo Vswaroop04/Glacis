@@ -13,20 +13,20 @@ async function main() {
 
   // simulate out-of-order: DELIVERED arrives first, then an older PICKED_UP
   const entity = "MAEU-TEST-001";
-  const delivered: NormalizedEvent = {
-    event_type: "SHIPMENT", entity_id: entity, canonical_state: "DELIVERED",
+  const delivered = {
+    event_type: "SHIPMENT", mode: "SEA", entity_id: entity, canonical_state: "DELIVERED",
     event_timestamp: "2026-04-28T02:42:00Z",
     carrier: { scac: "MAEU", name: "Maersk" }, container_no: null,
     event_locode: "IDJKT", event_location_name: "Jakarta",
     event_location: null, raw_milestone_text: "delivered",
-  };
-  const pickedUp: NormalizedEvent = {
-    event_type: "SHIPMENT", entity_id: entity, canonical_state: "PICKED_UP",
+  } satisfies NormalizedEvent;
+  const pickedUp = {
+    event_type: "SHIPMENT", mode: "SEA", entity_id: entity, canonical_state: "PICKED_UP",
     event_timestamp: "2026-04-19T03:15:00Z",
     carrier: { scac: "MAEU", name: "Maersk" }, container_no: null,
     event_locode: "CNSHA", event_location_name: "Shanghai",
     event_location: null, raw_milestone_text: "gate in",
-  };
+  } satisfies NormalizedEvent;
 
   await insertNormalizedEvent({ rawEventId: id1, event: delivered, confidence: 0.97, model: "test", enrichmentStatus: "SKIPPED", needsReview: false });
   await applySnapshot({ entityId: entity, eventType: "SHIPMENT", canonicalState: "DELIVERED", eventTimestamp: delivered.event_timestamp, route: null });

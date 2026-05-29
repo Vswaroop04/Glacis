@@ -32,7 +32,8 @@ async function main() {
     const r = await normalize(s.body, config.primaryModel);
     const handled = handle(r.event);
     console.log(`\n${s.name}`);
-    console.log(`  type=${r.event.event_type} confidence=${r.confidence} model=${r.model}`);
+    const mode = r.event.event_type === "SHIPMENT" ? ` mode=${r.event.mode}` : "";
+    console.log(`  type=${r.event.event_type}${mode} confidence=${r.confidence} model=${r.model}`);
     if (handled.snapshot) {
       console.log(`  entity=${handled.snapshot.entityId} state=${handled.snapshot.canonicalState} ts=${handled.snapshot.eventTimestamp}`);
     } else {

@@ -20,6 +20,12 @@ export const INVOICE_STATES = ["ISSUED", "PAID", "VOIDED", "REFUNDED"] as const;
 export const ShipmentState = z.enum(SHIPMENT_STATES);
 export const InvoiceState = z.enum(INVOICE_STATES);
 
+// transport mode — the lifecycle is the same across modes, but enrichment
+// (location codes, distance method, identifier validation) is mode-specific
+export const TRANSPORT_MODES = ["SEA", "AIR", "ROAD", "RAIL", "PARCEL", "UNKNOWN"] as const;
+export const TransportMode = z.enum(TRANSPORT_MODES);
+export type TransportMode = (typeof TRANSPORT_MODES)[number];
+
 // geo primitives, filled in by enrichment
 export const GeoPoint = z.object({
   locode: z.string().nullable(),                 // UN/LOCODE, e.g. "CNSHA" — LLM-extracted
@@ -35,14 +41,18 @@ export const Route = z.object({
   origin: GeoPoint.nullable(),
   destination: GeoPoint.nullable(),
   distance_km: z.number().nullable(),
-  distance_mode: z.enum(["SEA_ROUTE", "HAVERSINE", "NONE"]),
+  // how the distance was derived — varies by mode (sea lane vs great circle vs road)
+  distance_mode: z.enum(["SEA_ROUTE", "GREAT_CIRCLE", "ROAD", "NONE"]),
+  transit_days: z.number().nullable(),
+  eta: z.string().nullable(),
 });
 export type Route = z.infer<typeof Route>;
 
 // tier 1: what the LLM must return
 export const ShipmentLLM = z.object({
   event_type: z.literal("SHIPMENT"),
-  entity_id: z.string().describe("master BL > house BL > container number"),
+  mode: TransportMode.catch("UNKNOWN").describe("transport mode: SEA, AIR, ROAD, RAIL, PARCEL"),
+  entity_id: z.string().describe("master BL > house BL > AWB > tracking/container number"),
   canonical_state: ShipmentState,
   event_timestamp: z.string().describe("ISO 8601 UTC"),
   carrier: z.object({ scac: z.string().nullable(), name: z.string().nullable() }),

@@ -17,6 +17,7 @@ const TOOL_PARAMS = {
   type: "object",
   properties: {
     event_type: { type: "string", enum: ["SHIPMENT", "INVOICE", "UNCLASSIFIED"] },
+    mode: { type: "string", enum: ["SEA", "AIR", "ROAD", "RAIL", "PARCEL", "UNKNOWN"], description: "transport mode for SHIPMENT" },
     entity_id: { type: "string" },
     canonical_state: { type: "string" },
     event_timestamp: { type: "string" },

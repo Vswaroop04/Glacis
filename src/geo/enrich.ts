@@ -1,6 +1,6 @@
 import type { GeoProvider } from "./provider.js";
-import { haversineKm } from "./provider.js";
-import type { NormalizedEvent, GeoPoint, Route } from "../schemas.js";
+import { modeDistanceKm, estimateEta } from "../enrich/distance.js";
+import type { NormalizedEvent, GeoPoint, Route, TransportMode } from "../schemas.js";
 
 export type EnrichmentStatus = "DONE" | "PARTIAL" | "SKIPPED" | "FAILED";
 
@@ -42,24 +42,25 @@ export interface RouteLeg {
  * origin = earliest located leg (preferring PICKED_UP), destination = latest
  * (preferring the delivery legs).
  */
-export function assembleRoute(legs: RouteLeg[]): Route | null {
+export function assembleRoute(legs: RouteLeg[], mode: TransportMode = "UNKNOWN"): Route | null {
   const located = legs
     .filter((l): l is RouteLeg & { point: GeoPoint } => l.point != null && l.point.lat != null)
     .sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
 
   if (located.length === 0) return null;
 
-  const origin = located.find((l) => l.state === "PICKED_UP")?.point ?? located[0].point;
+  const originLeg = located.find((l) => l.state === "PICKED_UP") ?? located[0];
+  const origin = originLeg.point;
   const deliveryLeg = [...located].reverse().find((l) => l.state === "DELIVERED" || l.state === "OUT_FOR_DELIVERY");
-  const destination = deliveryLeg?.point ?? located[located.length - 1].point;
+  const destination = (deliveryLeg ?? located[located.length - 1]).point;
 
   // a single port (or all events at the same place) is not a route yet
   const samePlace = origin.locode != null && origin.locode === destination.locode;
-  const distance = samePlace ? null : haversineKm(origin, destination);
-  return {
-    origin,
-    destination: samePlace ? null : destination,
-    distance_km: distance,
-    distance_mode: distance != null ? "HAVERSINE" : "NONE",
-  };
+  if (samePlace) {
+    return { origin, destination: null, distance_km: null, distance_mode: "NONE", transit_days: null, eta: null };
+  }
+
+  const { km, label } = modeDistanceKm(mode, origin, destination);
+  const { transitDays, eta } = estimateEta(mode, km, originLeg.ts);
+  return { origin, destination, distance_km: km, distance_mode: label, transit_days: transitDays, eta };
 }

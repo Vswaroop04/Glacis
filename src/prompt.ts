@@ -9,6 +9,14 @@ Classify into exactly one of: SHIPMENT, INVOICE, UNCLASSIFIED
 - INVOICE: any financial document — issued, settled, cancelled, or reversed
 - UNCLASSIFIED: advisories, alerts, weather, port congestion, anything that is neither
 
+TRANSPORT MODE (SHIPMENT only) — infer from the payload:
+- SEA   : containers, vessels, IMO, bills of lading, ports/UN-LOCODE
+- AIR   : air waybills (AWB), flights, airports/IATA codes
+- ROAD  : trucks, trailers, street addresses, last-mile couriers
+- RAIL  : rail wagons, intermodal rail
+- PARCEL: small parcel / courier tracking numbers
+Use UNKNOWN only when the mode genuinely cannot be inferred.
+
 CANONICAL SHIPMENT STATES — map vendor language to exactly one of these:
 - PICKED_UP        : container collected from shipper / received at origin terminal / gate-in
 - IN_TRANSIT       : vessel/truck/aircraft departed, cargo is moving between origin and destination
@@ -43,7 +51,7 @@ null policy : Use null only when a field is genuinely absent. Never invent value
 
 REQUIRED FIELDS BY TYPE — you MUST populate all of these:
 SHIPMENT:
-  event_type, entity_id, canonical_state, event_timestamp,
+  event_type, mode, entity_id, canonical_state, event_timestamp,
   carrier (object: {scac, name}), container_no, event_locode, raw_milestone_text
 
 INVOICE:
