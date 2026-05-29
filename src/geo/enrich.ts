@@ -53,10 +53,12 @@ export function assembleRoute(legs: RouteLeg[]): Route | null {
   const deliveryLeg = [...located].reverse().find((l) => l.state === "DELIVERED" || l.state === "OUT_FOR_DELIVERY");
   const destination = deliveryLeg?.point ?? located[located.length - 1].point;
 
-  const distance = origin !== destination ? haversineKm(origin, destination) : null;
+  // a single port (or all events at the same place) is not a route yet
+  const samePlace = origin.locode != null && origin.locode === destination.locode;
+  const distance = samePlace ? null : haversineKm(origin, destination);
   return {
     origin,
-    destination: destination === origin ? null : destination,
+    destination: samePlace ? null : destination,
     distance_km: distance,
     distance_mode: distance != null ? "HAVERSINE" : "NONE",
   };
