@@ -1,74 +1,43 @@
 # Glacis — AI Webhook Ingestion Service
 
-Ingests arbitrary vendor webhooks (logistics + financial), classifies and normalizes them into a strict canonical schema using an LLM, and persists the result with the resiliency a production webhook pipeline needs: sub-second acknowledgement, idempotency, out-of-order handling, retries, and a dead-letter queue.
+A service that takes webhooks from logistics and finance vendors — every one of them shaped differently — figures out what each event is, normalizes it into one internal schema with an LLM, and stores it so that duplicates, out-of-order arrivals, and bad data don't corrupt anything.
 
-The interesting part of this problem is not the LLM call — it's everything around it. Vendors expect an instant ACK, they resend the same payload, and events arrive out of order. The architecture below is built around those realities.
+## How I read the assignment
 
----
+The first thing I decided was that the LLM part is the easy 20%. Calling a model with a tool schema and getting back clean JSON is close to a solved problem. The brief itself tells you where the real work is — it mentions sub-second acknowledgements, vendors resending the same payload, and events arriving out of order. Those three lines are the whole assignment. A `POST → LLM → save` toy meets none of them. So I built around them and treated the model call as one stage in a pipeline rather than the centerpiece.
 
-## Architecture
+## I started with a benchmark, not the service
+
+Before writing any service code I wanted to know which model to trust, so I wrote a benchmark suite first ([`benchmarks/`](benchmarks/README.md)). It runs the sample payloads and an adversarial set across six models — Haiku, Sonnet, and four GPT variants — and measures accuracy, reliability on the hard cases, latency, throughput, and cost.
+
+That told me two useful things. Haiku 4.5 gets 100% on the clean payloads at low latency and low cost, so it's the right default. Sonnet is the most reliable when the input gets adversarial, but it's slow and pricey, so it's wrong as a default and right as a fallback. I used that result directly: the worker runs Haiku first, and only escalates to Sonnet if the first attempt fails validation. I'll come back to that.
+
+## The shape of the system
+
+The single most important decision is that the LLM never runs on the request path. When a webhook comes in, I hash it, write the raw event to Postgres, drop a job on a queue, and return `202` — measured at around 15ms. Everything else happens in a background worker.
 
 ```
-                    POST /webhooks (any JSON)
-                              │
-              ┌───────────────▼────────────────┐
-              │  Fastify ingest                 │
-              │  1. hash body (idempotency key) │
-              │  2. INSERT raw_event (ON CONFLICT DO NOTHING)
-              │  3. enqueue (jobId = hash)      │
-              │  4. 202 Accepted  ← ~15ms       │   LLM is OFF the hot path
-              └───────────────┬────────────────┘
-                              │  (Redis / BullMQ)
-              ┌───────────────▼────────────────┐
-              │  Worker (concurrency + limiter) │
-              │  ┌───────────────────────────┐  │
-              │  │ normalize  (1 LLM call)    │  │  Haiku → Sonnet on retry
-              │  │ validate   (Zod gate)      │  │  invalid ⇒ retry ⇒ DLQ
-              │  │ handle     (type registry) │  │
-              │  │ transition (state machine) │  │  flags regressions/anomalies
-              │  │ enrich     (geo, best-effort)│ │
-              │  │ persist    (event + snapshot)│ │  timestamp-guarded upsert
-              │  └───────────────────────────┘  │
-              └───────────────┬────────────────┘
-                              │
-              ┌───────────────▼────────────────┐
-              │ Postgres (durable source of truth)
-              │   raw_events        immutable originals
-              │   normalized_events append-only log
-              │   entity_snapshots  derived head state
-              │   dead_letters      exhausted retries
-              └─────────────────────────────────┘
+POST /webhooks ─► hash ─► save raw ─► enqueue ─► 202   (~15ms, no LLM here)
+                                          │
+                                     (BullMQ / Redis)
+                                          ▼
+   worker: normalize ─► validate ─► route to handler ─► check state transition
+           ─► enrich (geo, carrier, container, ETA) ─► save event + snapshot
 ```
 
-**Postgres is the source of truth; Redis/BullMQ is only work dispatch.** The raw event is persisted *before* it is enqueued, so if Redis is lost no webhook is lost — the work can be re-enqueued from `raw_events`.
+I went with Postgres for storage and BullMQ on Redis for the queue. The thing I care about there: Postgres is the source of truth, the queue is just dispatch. I write the raw event to Postgres *before* enqueuing, so if Redis falls over I haven't lost a single webhook — I can replay from the raw table. A lot of designs put the payload only in the queue and lose it when the queue dies.
 
----
+## Idempotency
 
-## Why not an "agent"?
+Vendors resend. The brief says so explicitly. My key is the SHA-256 of the canonical body (sorted keys, so field order doesn't matter), used as both the Postgres primary key and the BullMQ job id. An exact resend collapses to the same row and the same job — deduped at the storage and the queue layer.
 
-Normalization is a single, bounded task: classify + extract into a strict schema. It is done in **one structured tool call**, not an autonomous agent loop, because:
+I actually got this wrong the first time and caught it in live testing, which is worth admitting because it shaped the final design. I'd added a second "smart" dedup key on `(vendor, document_id)`, thinking it would catch logical duplicates. But an invoice's ISSUED and PAID events share the same `doc_ref` — they're different events in the same entity's life. My clever key threw the PAID event away as a duplicate. The fix was to delete the clever key: ISSUED and PAID have different bodies, so they hash differently and stay distinct, while genuine byte-for-byte resends still collapse. The simpler key was the correct one.
 
-- **Latency** — one round trip (~2s) vs many. Vendors and the worker both benefit.
-- **Cost** — 1× the tokens, not 3–10×.
-- **Determinism** — one call is testable and reproducible; the [benchmark](benchmarks/README.md) shows a single Haiku call hits 100% on the sample payloads.
-- **Failure surface** — one thing can go wrong, not a loop that can stall.
+## Out-of-order events
 
-The extensibility an agent would give is provided instead by a **typed handler registry** ([`src/handlers`](src/handlers/index.ts)): adding a new event type is one handler + one switch arm, with no change to the LLM or worker layers. Tool-use *is* used for the one place it genuinely fits — deterministic **geo enrichment** — but as plain code, because an LLM would hallucinate coordinates.
+This is the part I was most worried about getting wrong, because it's the part a naive system silently corrupts. If `DELIVERED` arrives and then a delayed `PICKED_UP` shows up an hour later, you must not let the shipment regress to PICKED_UP.
 
----
-
-## Resiliency & data integrity
-
-### Sub-second acknowledgement
-The endpoint persists the raw event, enqueues a job, and returns `202` — measured at **~15ms**. The LLM call happens asynchronously in the worker, so vendor-facing latency is independent of model latency.
-
-### Idempotency (vendors resend the same payload)
-The idempotency key is the **SHA-256 of the canonical body** (key-order independent), used as the `raw_events` primary key *and* the BullMQ `jobId`. An exact retry collapses to the same row and the same job — dedup at both the storage and queue layers. A vendor-supplied `Idempotency-Key` header is honored when present.
-
-A deliberate non-choice: dedup is **not** keyed on a vendor event/document id, because an invoice's `ISSUED` and `PAID` events share a `doc_ref` but are different lifecycle events. They have different bodies, so they hash differently and stay distinct — while true duplicates still collapse.
-
-### Out-of-order events (this is where correctness is easy to get wrong)
-Events are ordered by **`event_timestamp` (when it happened)**, never by arrival time. The snapshot upsert is timestamp-guarded ([`applySnapshot`](src/db.ts)):
+I order everything by the event's own timestamp, never by when it arrived. The snapshot update is guarded in SQL — the head state only moves forward when the incoming event is actually newer:
 
 ```sql
 canonical_state = CASE
@@ -76,74 +45,76 @@ canonical_state = CASE
   THEN EXCLUDED.canonical_state ELSE entity_snapshots.canonical_state END
 ```
 
-A `PICKED_UP` that arrives *after* `DELIVERED` is still stored in the append-only log and counted, but it **cannot regress** the head state. Verified live: the head stays `DELIVERED`/`IN_TRANSIT` while the late event lands in history.
+The late `PICKED_UP` still gets stored and counted in the event log, it just can't move the head backwards. I tested this end-to-end: post the in-transit event, then post an earlier pickup, and the entity stays `IN_TRANSIT` with two events in its timeline ordered correctly.
 
-### State machine
-[`src/state-machine.ts`](src/state-machine.ts) classifies every transition: `INITIAL`, `ADVANCE`, `DUPLICATE`, `OUT_OF_ORDER` (benign late arrival), or `ANOMALY`. The key distinction: a late `PICKED_UP` (older timestamp) is benign, but a `PICKED_UP` with a *newer* timestamp after `DELIVERED` is a genuine `ANOMALY`. Anomalies are stored and flagged `needs_review` — never silently dropped. Invoice rules (`ISSUED → PAID|VOIDED`, `PAID → REFUNDED`) are enforced the same way.
+On top of the timestamp guard there's a small state machine ([`src/state-machine.ts`](src/state-machine.ts)) that judges each transition. A late pickup (older timestamp) is a benign `OUT_OF_ORDER`. But a pickup with a *newer* timestamp landing after delivery is a real `ANOMALY` — that's not late data, that's wrong data — so it gets flagged for review instead of trusted. Invoices get the same treatment (`ISSUED → PAID → REFUNDED`, with `VOIDED` off ISSUED).
 
-### LLM reliability
-The model output passes a **Zod validation gate** before it can be stored. Invalid output throws and becomes a retry. The model also returns a `confidence`; anything below threshold is flagged `needs_review`.
+## Not trusting the model blindly
 
-### Retries, backoff, tiered fallback, DLQ
-BullMQ retries with exponential backoff. **Attempt 1 uses Haiku (cheap, fast); retries escalate to Sonnet** (the benchmark's most reliable model on hard cases) — a model choice driven directly by the benchmark data. When attempts are exhausted the job is mirrored into `dead_letters` with the error and attempt count, and `raw_events.status` becomes `failed`. Verified live.
+The model output goes through a Zod schema gate before it's allowed anywhere near storage. If it doesn't parse, it throws, and that becomes a retry — and the retry is where the model escalates from Haiku to Sonnet. The model also returns a confidence score; anything under threshold gets flagged for review rather than silently accepted.
 
-### Rate limiting
-The worker has a configurable limiter (`max` jobs / interval) plus concurrency. The queue absorbs unlimited inbound traffic; the limiter only paces *consumption* so spikes don't trigger LLM-provider 429s.
+## When things fail
 
-### Enrichment — filling what vendors leave out (best-effort)
-Logistics webhooks routinely omit fields the platform needs. The system derives them deterministically after normalization. All of this is **non-blocking**: any failure produces a `PARTIAL`/`FAILED`/`SKIPPED` status and is never allowed to fail normalization.
+BullMQ retries with exponential backoff. After the attempts are exhausted, the job is written into a `dead_letters` table with the error and the attempt count, and the raw event is marked `failed`. Nothing disappears. I tested this by pointing the worker at a model name that doesn't exist — the job retried, gave up, and landed in the dead-letter table with the 404 from the API attached.
 
-| Derived | How | Source of truth |
-|---|---|---|
-| Coordinates from a port code/name | static UN/LOCODE table → live geocoder fallback | [`geo/`](src/geo) |
-| Carrier name from a SCAC code | static SCAC registry (`MAEU`→Maersk) | [`enrich/carriers.ts`](src/enrich/carriers.ts) |
-| Container number validity | ISO 6346 check-digit; bad → `needs_review` | [`enrich/container.ts`](src/enrich/container.ts) |
-| Route distance + transit + ETA | mode-aware (sea/air/road), from resolved endpoints | [`enrich/distance.ts`](src/enrich/distance.ts) |
+There's also a rate limiter on the worker. The queue can absorb any amount of inbound traffic; the limiter just paces how fast the worker drains it, so a traffic spike doesn't turn into a wall of 429s from the model provider.
 
-**Geo resolution is two-tier.** A static LOCODE table is the *primary* (exact, offline, deterministic for known ports). A live **Photon→Nominatim** geocoder is the *fallback* for a port name with no code, or a road address — borrowed from the spotter-labs project's design, but global (no US bounding box). The [port geocoding benchmark](benchmarks/geo/README.md) shows *why* this ordering matters: freeform geocoding put "Port of Shanghai" ~9,000 km off, so the table must be primary and the geocoder labelled (`source: GEOCODER`) as best-effort only.
+## Filling in what vendors leave out
 
-### Multi-modal
-A shipment carries a `mode` (`SEA`/`AIR`/`ROAD`/`RAIL`/`PARCEL`), classified by the LLM. The lifecycle states are mode-agnostic, but enrichment is mode-aware: distance is a sea-lane approximation for `SEA`, an exact **great-circle for `AIR`**, and road routing for `ROAD`; ETA uses a per-mode speed. The sample payloads are all `SEA`, which is implemented end-to-end; `AIR` distance is correct out of the box; `ROAD` is wired through the same geocoder + a routing-provider interface (the spotter-labs ORS HGV stack is the production fit). This keeps the system from being locked to one transport mode.
+Logistics data is missing things constantly. A webhook gives you a SCAC code but no carrier name, a port but no coordinates, a container number with no way to know if it's been corrupted in transit. So after normalizing, I enrich — deterministically, and always best-effort, so a failure here never fails the event itself.
 
----
-
-## Data model
-
-| Table | Role |
+| What's missing | How I fill it |
 |---|---|
-| `raw_events` | Immutable original payloads. The source of truth; never mutated except status. |
-| `normalized_events` | Append-only log of normalized + enriched events, with confidence/model/provenance. |
-| `entity_snapshots` | Derived current state per entity (rebuildable from the log). Holds the route. |
-| `dead_letters` | Events that exhausted retries, kept for inspection / replay. |
+| Coordinates for a port | static UN/LOCODE table, with a live geocoder as fallback |
+| Carrier name from a SCAC | a SCAC registry (`MAEU` → Maersk) |
+| Whether a container number is real | ISO 6346 check-digit math; a bad one gets flagged for review |
+| Route distance, transit time, ETA | computed from the resolved endpoints, mode-aware |
 
-This is event-sourcing-flavored: the raw payload and the normalized log are kept separately and never lost, and the snapshot is a derived projection.
+The geocoding I'd actually solved before, on a trucking project, so I pulled that pattern in: a primary geocoder (Photon) with a fallback (Nominatim), both free and key-less, with a cache in front. That project was US-only and routed trucks; this one is global ocean freight, so I dropped the US bounding box and re-benchmarked it against ports instead of street addresses, because the old numbers meant nothing here.
 
----
+That [port benchmark](benchmarks/geo/README.md) taught me something that changed the design. Freeform geocoding of "Port of Shanghai" came back about 9,000 km wrong, on both providers, and Nominatim failed Busan outright. So a port name is not something you can trust as a primary coordinate source. That's exactly why the static LOCODE table is primary and the geocoder is only a labelled fallback — known ports resolve exactly and offline, and anything the geocoder fills in is tagged `source: GEOCODER` so it's clear it's a guess.
+
+## It isn't only ships
+
+The samples are all ocean freight, but the brief defines a shipment as any parcel moving through a logistics network — that's air, road, rail, parcel too. The lifecycle states are the same regardless of mode, but the enrichment isn't. So a shipment carries a `mode`, and the distance logic follows it: a sea-lane approximation for ocean, an exact great-circle for air (which is genuinely correct for flights), road routing for trucks. Ocean is implemented all the way through because that's what the sample data is; air and road are wired through the same interfaces so the system isn't boxed into one mode. The trucking geocoder and HGV routing from that earlier project are exactly the road path, if it's ever needed.
+
+## Why there's no agent in here
+
+I considered making normalization an agent, and decided against it on purpose. Classifying and extracting into a fixed schema is a single bounded task — one structured call does it, and my benchmark proves a single Haiku call hits 100% on the samples. An agent loop would add latency, cost, and a pile of new failure modes for nothing. The flexibility people reach for an agent to get, I got from a plain handler registry: adding a new event type is one handler and one switch case, no change to the model layer.
+
+I looked at a workflow framework (Mastra) for the orchestration too, and passed for the same reason. The guarantees that matter here — the hash idempotency and the timestamp-guarded upsert — are specific to this domain and I want them explicit and visible, not hidden inside a framework's durable-workflow store, which would also become a second source of truth fighting with my raw table. BullMQ is the industry-standard queue and gives me retries and a dead-letter queue without taking the data-integrity logic out of my hands.
+
+## The data model
+
+Four tables, kept deliberately separate so nothing is ever lost:
+
+- `raw_events` — the original payload, untouched, the source of truth
+- `normalized_events` — an append-only log of every normalized event
+- `entity_snapshots` — the current state per entity, derived, rebuildable from the log
+- `dead_letters` — whatever exhausted its retries, kept for inspection
+
+It's event-sourcing in spirit: the raw payload and the event log are immutable, and the snapshot is just a projection over them.
 
 ## API
 
-| Method | Path | Description |
+| Method | Path | What it does |
 |---|---|---|
-| `POST` | `/webhooks` | Ingest any JSON. `202` + `x-webhook-id`, or `200 duplicate`. |
-| `GET` | `/webhooks/:id` | Processing status of one ingestion. |
-| `GET` | `/entities/:id` | Entity snapshot + full timeline (ordered by event time). |
-| `GET` | `/entities/:id/route` | Resolved origin/destination/distance. |
-| `GET` | `/dead-letters` | Failed events for inspection. |
-| `GET` | `/metrics` | Queue/status counts, needs-review, DLQ size, avg processing ms. |
-| `GET` | `/health` | Liveness. |
-
----
+| `POST` | `/webhooks` | takes any JSON, returns `202` (or `200` if it's a duplicate) |
+| `GET` | `/webhooks/:id` | processing status of one ingestion |
+| `GET` | `/entities/:id` | an entity's current state plus its full timeline |
+| `GET` | `/entities/:id/route` | resolved origin, destination, distance, ETA |
+| `GET` | `/dead-letters` | failed events |
+| `GET` | `/metrics` | queue counts, review backlog, DLQ size, average processing time |
+| `GET` | `/health` | liveness |
 
 ## Running it
 
 ```bash
-docker compose up -d          # postgres + redis
-cp .env.example .env          # add ANTHROPIC_API_KEY (OPENAI_API_KEY optional)
+docker compose up -d        # postgres + redis
+cp .env.example .env        # add ANTHROPIC_API_KEY
 npm install
-npm start                     # server + worker on :3000
+npm start                   # server + worker on :3000
 ```
-
-Then:
 
 ```bash
 curl -X POST localhost:3000/webhooks -H 'content-type: application/json' \
@@ -152,43 +123,18 @@ curl -X POST localhost:3000/webhooks -H 'content-type: application/json' \
        "port":{"code":"CNSHA","name":"Shanghai"}}'
 
 curl localhost:3000/entities/MAEU240498712
-curl localhost:3000/metrics
 ```
 
-Scripts: `npm run typecheck`, `npm run bench:llm` (model comparison), `npm run bench:geo` (port geocoding), and `scripts/smoke-*.ts` (db, normalize, state machine, geo, enrich).
+`npm run bench:llm` runs the model comparison, `npm run bench:geo` the port geocoding one, and the `scripts/smoke-*.ts` files exercise each piece (db, normalize, state machine, geo, enrich) on their own.
 
----
+## What I'd do before calling it production
 
-## Model choice — driven by the benchmark
+- Swap BullMQ for Kafka or Temporal once volume and replay guarantees matter.
+- Replace the sea-lane approximation with a real sea-route distance provider, and the small LOCODE table with a full UN/LOCODE / World Port Index dataset.
+- Promote the benchmark into CI so a prompt or model change can't regress accuracy without failing a build.
+- Build the review queue into an actual UI — right now low-confidence and anomalous events are flagged in the data but nobody's looking at them.
+- Add tracing across ingest → queue → model → store, and per-model accuracy dashboards.
 
-The default is **Haiku 4.5** with **Sonnet 4.6** as the retry fallback. This comes from the [benchmark suite](benchmarks/README.md), which compared 6 models across accuracy, reliability on hard/adversarial payloads, latency, throughput, and cost. Haiku gives 100% accuracy on clean payloads at low latency; Sonnet is the most reliable on adversarial cases, so it's the right escalation target — not the default.
+## Honest about the tradeoffs
 
----
-
-## Tradeoffs made for the time box
-
-- **Sea distance is a great-circle approximation**, not a true sea-lane distance (which follows shipping routes). It's labelled `SEA_ROUTE` and the distance layer is swappable for a sea-route provider (searoutes.com). Air distance is already exact (great-circle).
-- **Geo is a small static LOCODE table + a live geocoder fallback.** Production would use a full UN/LOCODE / World Port Index dataset; the geocoder is mainly for road addresses.
-- **In-process worker** rather than a separate worker deployment. The boundary (`startWorker`) is clean enough to split out.
-- **Polling-free BullMQ** keeps infra to Postgres + Redis (one `docker compose up`) rather than Kafka/Temporal.
-- **Confidence** is the model's self-report, not a calibrated score.
-- **AIR/ROAD enrichment is wired but not deep** — no sample payloads for those modes; SEA is the implemented path.
-
----
-
-## Production roadmap
-
-- **Queue/durability**: BullMQ → Kafka or a durable workflow engine (Temporal) for replay, partitioning, and exactly-once semantics at scale.
-- **Scaling**: workers are stateless — scale horizontally; Postgres read replicas for the query endpoints.
-- **Observability**: OpenTelemetry traces across ingest → queue → LLM → persist; per-stage latency and per-model accuracy dashboards.
-- **Eval framework**: promote the benchmark into CI — gate prompt/model changes on accuracy regressions, add a labeled golden set.
-- **Human review queue**: surface `needs_review` (low confidence + anomalies) to an ops UI with correction feedback.
-- **Enrichment**: full UN/LOCODE dataset + sea-route distance provider; carrier SCAC registry.
-- **Schema evolution**: versioned canonical schema; backfill by replaying `normalized_events`.
-
----
-
-## Considered: Mastra / agent frameworks — and why not (yet)
-
-An agent framework (e.g. Mastra) was considered for orchestration. It was rejected for the hot path because the resiliency guarantees that matter here — body-hash idempotency and the timestamp-guarded out-of-order upsert — are domain-specific and must be explicit and visible, not delegated to a framework's durable-workflow store (which would also duplicate the `raw_events` queue as a second source of truth). BullMQ was chosen instead: it's the industry-standard job queue and provides retries/backoff/DLQ without hiding the data-integrity logic. A framework's eval tooling is a reasonable future addition (see roadmap), but not on the ingestion path.
-```
+Ocean distance is a great-circle approximation, not a true sea route, and it's labelled as such. Confidence is the model's own number, not a calibrated one. The worker runs in the same process as the server for simplicity, though the boundary is clean enough to split out. And air/road are wired but shallow, because I have no sample payloads for them and didn't want to ship code I couldn't test against real data.
