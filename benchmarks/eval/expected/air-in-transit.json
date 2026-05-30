@@ -1,0 +1,6 @@
+{
+  "event_type": "SHIPMENT",
+  "mode": "AIR",
+  "canonical_state": "IN_TRANSIT",
+  "entity_id": "020-12345678"
+}

@@ -1,0 +1,6 @@
+{
+  "event_type": "SHIPMENT",
+  "mode": "ROAD",
+  "canonical_state": "OUT_FOR_DELIVERY",
+  "entity_id": "1Z999AA10123456784"
+}

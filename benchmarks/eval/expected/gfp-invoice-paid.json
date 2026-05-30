@@ -1,0 +1,8 @@
+{
+  "event_type": "INVOICE",
+  "canonical_state": "PAID",
+  "entity_id": "GFP-INV-2026-Q2-08821",
+  "event_timestamp": "2026-04-22T16:47:11Z",
+  "amount_cents": 2435075,
+  "currency": "EUR"
+}

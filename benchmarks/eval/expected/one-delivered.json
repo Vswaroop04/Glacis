@@ -1,0 +1,7 @@
+{
+  "event_type": "SHIPMENT",
+  "mode": "SEA",
+  "canonical_state": "DELIVERED",
+  "entity_id": "ONEYMBLHKG260499",
+  "event_timestamp": "2026-04-28T02:42:00Z"
+}

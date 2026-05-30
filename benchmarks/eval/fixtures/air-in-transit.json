@@ -1,0 +1,9 @@
+{
+  "awb": "020-12345678",
+  "flight": "LH8400",
+  "carrier": "Lufthansa Cargo",
+  "status": "Uplift confirmed — departed origin airport",
+  "departure": "2026-04-21T22:00:00+01:00",
+  "origin": "FRA",
+  "dest": "JFK"
+}

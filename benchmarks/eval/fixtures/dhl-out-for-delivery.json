@@ -1,0 +1,10 @@
+{
+  "tracking_no": "1Z999AA10123456784",
+  "carrier": "DHL Express",
+  "scac": "DHLX",
+  "status_code": "ODAC",
+  "status_desc": "Out for delivery — with courier",
+  "estimated_delivery": "2026-04-28",
+  "last_scan_location": "Hamburg Delivery Hub",
+  "bl_ref": "HLCU2604OCEAN221"
+}

@@ -1,0 +1,7 @@
+{
+  "event_type": "SHIPMENT",
+  "mode": "SEA",
+  "canonical_state": "PICKED_UP",
+  "entity_id": "MAEU240498712",
+  "event_timestamp": "2026-04-19T03:15:00Z"
+}

@@ -1,0 +1,8 @@
+{
+  "event_type": "INVOICE",
+  "canonical_state": "ISSUED",
+  "entity_id": "GFP-INV-2026-Q2-08821",
+  "event_timestamp": "2026-04-15T07:00:00Z",
+  "amount_cents": 2435075,
+  "currency": "EUR"
+}

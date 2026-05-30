@@ -1,0 +1,13 @@
+{
+  "source": "globalfreightpay.api",
+  "channel": "carrier_billing",
+  "doc_ref": "GFP-INV-2026-Q2-08821",
+  "carrier": "Hapag-Lloyd AG",
+  "linked_bl": "HLCU2604OCEAN221",
+  "transaction": {
+    "kind": "freight invoice raised",
+    "issued_at": "2026-04-15T09:00:00+02:00",
+    "amount": "EUR 24.350,75",
+    "due_at": "2026-05-15T00:00:00+02:00"
+  }
+}
