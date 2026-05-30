@@ -94,6 +94,26 @@ I considered making normalization an agent, and decided against it on purpose. C
 
 I looked at a workflow framework (Mastra) for the orchestration too, and passed for the same reason. The guarantees that matter here — the hash idempotency and the timestamp-guarded upsert — are specific to this domain and I want them explicit and visible, not hidden inside a framework's durable-workflow store, which would also become a second source of truth fighting with my raw table. BullMQ is the industry-standard queue and gives me retries and a dead-letter queue without taking the data-integrity logic out of my hands.
 
+## The internal schema we defined
+
+The assignment asks you to define a strict internal schema, so here's the one I settled on. Every webhook, whatever shape the vendor sent, is converted into one of **three canonical event types** — a discriminated union in [`src/schemas.ts`](src/schemas.ts):
+
+- **SHIPMENT** — mode, entity id (the BL/AWB), canonical state, exception flag, carrier, parties, location, timestamp.
+- **INVOICE** — entity id (the invoice ref), canonical state, amount in cents, currency, due date, linked BL.
+- **UNCLASSIFIED** — just a reason.
+
+The `event_type` field is the discriminant: the model picks it during classification, and that decides which of the three shapes the event is validated and stored as. Before that point it's untyped raw JSON; after it, it's exactly one of three strict shapes.
+
+### Why shipment and invoice events live in the same tables
+
+A deliberate decision worth calling out: both event types are stored **together** — in one `normalized_events` log and one `entity_snapshots` table — rather than in separate per-type tables.
+
+The reason is that the parts that differ between a shipment and an invoice are the *contents* of an event, while the parts the storage layer cares about are the *same* for both: every event has an id, a type, an entity it belongs to, a state, and a timestamp; every entity has a current state and a last-seen time. That shared structure is what the log and the snapshot are built around. The type-specific fields (a shipment's container number, an invoice's amount) ride inside a JSONB `payload`, so adding or changing them never touches the table shape — and a *new* entity type later (air customs declaration, say) needs no migration at all.
+
+The alternative — a table per type — would mean every "where is entity X?" read, every metric, and every list endpoint becomes a UNION or a type-lookup-first, plus two code paths for writes, all to avoid a few nullable columns. For a uniform read model that isn't worth it. I kept one set of tables and instead enforced the one invariant that a shared table can't guarantee on its own — that an invoice state can't land in a shipment row — with a database **CHECK constraint** on `entity_snapshots`. So: one storage path, but the database still rejects a `SHIPMENT` row whose state is `PAID`.
+
+(This is single-table inheritance, and the table is already normalized in the relational sense — the nullable shipment-only columns are sparse optional attributes, not a normal-form violation.)
+
 ## The data model
 
 Four tables, kept deliberately separate so nothing is ever lost:
