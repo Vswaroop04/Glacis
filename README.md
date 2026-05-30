@@ -49,6 +49,8 @@ The late `PICKED_UP` still gets stored and counted in the event log, it just can
 
 On top of the timestamp guard there's a small state machine ([`src/state-machine.ts`](src/state-machine.ts)) that judges each transition. A late pickup (older timestamp) is a benign `OUT_OF_ORDER`. But a pickup with a *newer* timestamp landing after delivery is a real `ANOMALY` that's not late data, that's wrong data — so it gets flagged for review instead of trusted. Invoices get the same treatment (`ISSUED → PAID → REFUNDED`, with `VOIDED` off ISSUED).
 
+The assignment also mentions *exceptions* (customs holds, delays, damage), and these were the one part of the lifecycle I had to think about, because an exception isn't a state — a shipment on a customs hold is still physically where it was. So instead of inventing an `EXCEPTION` state and corrupting the progression, an exception event keeps its canonical state (a hold at the destination stays `OUT_FOR_DELIVERY`) and sets an `is_exception` flag with a reason. That flag routes the event straight to the review queue, since a hold is exactly the kind of thing a human needs to act on, and it shows up on the entity's timeline. The four-state model stays clean; the exception rides alongside it.
+
 ## Not trusting the model blindly
 
 The model output goes through a Zod schema gate before it's allowed anywhere near storage. If it doesn't parse, it throws, and that becomes a retry and the retry is where the model escalates from Haiku to Sonnet.
