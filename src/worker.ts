@@ -85,6 +85,8 @@ async function process(job: Job<NormalizeJob>): Promise<void> {
       canonicalState: handled.snapshot.canonicalState,
       eventTimestamp: handled.snapshot.eventTimestamp,
       route,
+      isException: enriched.event.event_type === "SHIPMENT" ? enriched.event.is_exception : false,
+      exceptionReason: enriched.event.event_type === "SHIPMENT" ? enriched.event.exception_reason ?? null : null,
     });
   }
 

@@ -35,6 +35,7 @@ const metrics: Record<string, Metric> = {
   state: { pass: 0, total: 0 },
   entity: { pass: 0, total: 0 },
   mode: { pass: 0, total: 0 },
+  exception: { pass: 0, total: 0 },
   timestamp: { pass: 0, total: 0 },
   amount: { pass: 0, total: 0 },
   currency: { pass: 0, total: 0 },
@@ -55,9 +56,9 @@ async function main() {
   console.log(`\nGlacis - Normalization Correctness Eval`);
   console.log(`${files.length} fixtures · model ${config.primaryModel}\n`);
 
-  const header = ["fixture", "class", "state", "entity", "mode", "ts", "amount", "curr"];
+  const header = ["fixture", "class", "state", "entity", "mode", "exc", "ts", "amount", "curr"];
   console.log(header.map((h, i) => pad(h, i === 0 ? 24 : 7)).join(""));
-  console.log("-".repeat(24 + 7 * 7));
+  console.log("-".repeat(24 + 7 * 8));
 
   for (const file of files) {
     const name = basename(file, ".json");
@@ -79,6 +80,7 @@ async function main() {
       score("state", exp.canonical_state, got.canonical_state),
       score("entity", exp.entity_id, got.entity_id),
       score("mode", exp.mode, got.mode),
+      score("exception", exp.is_exception, got.is_exception),
       score("timestamp", exp.event_timestamp, got.event_timestamp, sameTimestamp),
       score("amount", exp.amount_cents, got.amount_cents),
       score("currency", exp.currency, got.currency),
@@ -87,7 +89,7 @@ async function main() {
   }
 
   console.log("\nAccuracy by metric:");
-  const order = ["classification", "state", "entity", "mode", "timestamp", "amount", "currency"];
+  const order = ["classification", "state", "entity", "mode", "exception", "timestamp", "amount", "currency"];
   for (const m of order) {
     const { pass, total } = metrics[m];
     if (total === 0) continue;

@@ -69,6 +69,10 @@ CREATE TABLE IF NOT EXISTS dead_letters (
 ALTER TABLE normalized_events ADD COLUMN IF NOT EXISTS model_confidence REAL;
 ALTER TABLE normalized_events ADD COLUMN IF NOT EXISTS prompt_version TEXT;
 
+-- so you can answer "which shipments are currently held?" off the snapshot
+ALTER TABLE entity_snapshots ADD COLUMN IF NOT EXISTS has_open_exception BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE entity_snapshots ADD COLUMN IF NOT EXISTS open_exception_reason TEXT;
+
 -- events the system is not sure about, surfaced for a human to check
 CREATE TABLE IF NOT EXISTS review_queue (
   id           BIGSERIAL PRIMARY KEY,
@@ -185,11 +189,14 @@ export async function applySnapshot(args: {
   canonicalState: string;
   eventTimestamp: string;
   route: Route | null;
+  isException: boolean;
+  exceptionReason: string | null;
 }): Promise<void> {
   await pool.query(
     `INSERT INTO entity_snapshots
-       (entity_id, event_type, canonical_state, last_event_timestamp, route, event_count, updated_at)
-     VALUES ($1, $2, $3, $4, $5, 1, now())
+       (entity_id, event_type, canonical_state, last_event_timestamp, route,
+        has_open_exception, open_exception_reason, event_count, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 1, now())
      ON CONFLICT (entity_id) DO UPDATE SET
        canonical_state = CASE
          WHEN EXCLUDED.last_event_timestamp > entity_snapshots.last_event_timestamp
@@ -199,13 +206,30 @@ export async function applySnapshot(args: {
        -- route is derived from the entity's full history, so the freshest
        -- computation is always the most complete; take it whenever present
        route = COALESCE(EXCLUDED.route, entity_snapshots.route),
+       -- exception status follows the latest event, same out-of-order guard as state
+       has_open_exception = CASE
+         WHEN EXCLUDED.last_event_timestamp > entity_snapshots.last_event_timestamp
+         THEN EXCLUDED.has_open_exception ELSE entity_snapshots.has_open_exception END,
+       open_exception_reason = CASE
+         WHEN EXCLUDED.last_event_timestamp > entity_snapshots.last_event_timestamp
+         THEN EXCLUDED.open_exception_reason ELSE entity_snapshots.open_exception_reason END,
        event_count = entity_snapshots.event_count + 1,
        updated_at = now()`,
     [
       args.entityId, args.eventType, args.canonicalState, args.eventTimestamp,
       args.route ? JSON.stringify(args.route) : null,
+      args.isException, args.exceptionReason,
     ],
   );
+}
+
+export async function listOpenExceptions(limit = 100) {
+  const res = await pool.query(
+    `SELECT entity_id, event_type, canonical_state, open_exception_reason, last_event_timestamp
+       FROM entity_snapshots WHERE has_open_exception ORDER BY last_event_timestamp DESC LIMIT $1`,
+    [limit],
+  );
+  return res.rows;
 }
 
 export async function getSnapshot(entityId: string) {

@@ -29,12 +29,12 @@ async function main() {
   } satisfies NormalizedEvent;
 
   await insertNormalizedEvent({ rawEventId: id1, event: delivered, confidence: 0.97, modelConfidence: 0.97, model: "test", promptVersion: "test", enrichmentStatus: "SKIPPED", needsReview: false });
-  await applySnapshot({ entityId: entity, eventType: "SHIPMENT", canonicalState: "DELIVERED", eventTimestamp: delivered.event_timestamp, route: null });
+  await applySnapshot({ entityId: entity, eventType: "SHIPMENT", canonicalState: "DELIVERED", eventTimestamp: delivered.event_timestamp, route: null, isException: false, exceptionReason: null });
 
   const id2 = "hash-bbb";
   await insertRawEvent({ id: id2, vendor: "maersk", vendorEventId: "EVT-2", payload: { x: 2 } });
   await insertNormalizedEvent({ rawEventId: id2, event: pickedUp, confidence: 0.95, modelConfidence: 0.95, model: "test", promptVersion: "test", enrichmentStatus: "SKIPPED", needsReview: false });
-  await applySnapshot({ entityId: entity, eventType: "SHIPMENT", canonicalState: "PICKED_UP", eventTimestamp: pickedUp.event_timestamp, route: null });
+  await applySnapshot({ entityId: entity, eventType: "SHIPMENT", canonicalState: "PICKED_UP", eventTimestamp: pickedUp.event_timestamp, route: null, isException: false, exceptionReason: null });
 
   const snap = await getSnapshot(entity);
   console.log(`out-of-order guard: state=${snap.canonical_state} (want DELIVERED), event_count=${snap.event_count} (want 2)`);

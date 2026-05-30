@@ -3,6 +3,5 @@
   "mode": "SEA",
   "canonical_state": "IN_TRANSIT",
   "entity_id": "MAEU240498712",
-  "is_exception": false,
-  "event_timestamp": "2026-04-21T14:47:00Z"
+  "is_exception": true
 }

@@ -1,0 +1,8 @@
+{
+  "carrier_scac": "MAEU",
+  "transport_doc": { "type": "MBL", "number": "MAEU240498712" },
+  "container": "MSKU7748112",
+  "milestone": "Vessel held at anchorage awaiting berth — delayed due to port congestion",
+  "milestone_at": "2026-04-25T06:00:00+08:00",
+  "port": { "code": "CNSHA", "name": "Shanghai" }
+}

@@ -5,7 +5,7 @@ import { enqueueNormalize } from "./queue.js";
 import { publish, subscribe } from "./bus.js";
 import {
   insertRawEvent, getRawEvent, getSnapshot, getTimeline,
-  listDeadLetters, listReviewQueue, metrics,
+  listDeadLetters, listReviewQueue, listOpenExceptions, metrics,
 } from "./db.js";
 
 const INDEX_HTML = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
@@ -85,6 +85,9 @@ export function buildServer(): FastifyInstance {
 
   // Human review queue: events the system wasn't confident about.
   app.get("/review-queue", async () => ({ review_queue: await listReviewQueue() }));
+
+  // Shipments currently sitting on an exception (customs hold, delay, etc).
+  app.get("/exceptions", async () => ({ open_exceptions: await listOpenExceptions() }));
 
   // Operational metrics.
   app.get("/metrics", async () => await metrics());
