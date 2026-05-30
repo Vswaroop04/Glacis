@@ -96,7 +96,7 @@ I looked at a workflow framework (Mastra) for the orchestration too, and passed 
 
 ## The internal schema we defined
 
-The assignment asks you to define a strict internal schema, so here's the one I settled on. Every webhook, whatever shape the vendor sent, is converted into one of **three canonical event types** — a discriminated union in [`src/schemas.ts`](src/schemas.ts):
+The assignment asks to define a strict internal schema, so here's the one I settled on. Every webhook, whatever shape the vendor sent, is converted into one of **three canonical event types** — a discriminated union in [`src/schemas.ts`](src/schemas.ts):
 
 - **SHIPMENT** — mode, entity id (the BL/AWB), canonical state, exception flag, carrier, parties, location, timestamp.
 - **INVOICE** — entity id (the invoice ref), canonical state, amount in cents, currency, due date, linked BL.
