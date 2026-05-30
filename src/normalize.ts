@@ -36,6 +36,7 @@ const TOOL_PARAMS = {
     raw_milestone_text: { type: "string" },
     amount_cents: { type: "integer", description: "smallest currency unit; European 24.350,75 = 2435075" },
     currency: { type: "string", description: "ISO 4217 code e.g. EUR, USD" },
+    due_date: { type: ["string", "null"], description: "ISO 8601 UTC invoice payment due date if present" },
     linked_bl: { type: ["string", "null"] },
     raw_transaction_kind: { type: "string" },
     reason: { type: "string" },

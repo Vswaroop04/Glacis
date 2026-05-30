@@ -53,6 +53,8 @@ amount_cents: Parse ALL number formats to integer cents (smallest currency unit)
               NEVER return a float. NEVER omit this field for INVOICE payloads.
 currency    : Extract the ISO 4217 three-letter code (EUR, USD, GBP, SGD ...).
               "Euros" → "EUR". "US Dollars" → "USD". NEVER omit for INVOICE payloads.
+due_date    : For INVOICE, the payment due date as ISO 8601 UTC if the payload has one
+              (e.g. due_at, payment_due, net terms date). Use null when genuinely absent.
 event_locode: For SHIPMENT, the UN/LOCODE of where THIS event happened, if present
               (e.g. port of loading for IN_TRANSIT, port of discharge for DELIVERED).
               Extract the code only — do NOT invent coordinates; a downstream service resolves those.
@@ -95,6 +97,7 @@ Correct output:
   "event_timestamp": "2026-04-22T16:47:11Z",
   "amount_cents": 2435075,
   "currency": "EUR",
+  "due_date": null,
   "carrier": null,
   "linked_bl": null,
   "raw_transaction_kind": "settled in full",

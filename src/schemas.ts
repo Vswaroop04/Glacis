@@ -74,6 +74,7 @@ export const InvoiceLLM = z.object({
   event_timestamp: z.string().describe("ISO 8601 UTC"),
   amount_cents: z.number().int().describe("smallest currency unit, never a float"),
   currency: z.string().length(3).describe("ISO 4217 code"),
+  due_date: z.string().nullish().describe("ISO 8601 UTC payment due date, if present — enables overdue tracking"),
   carrier: z.string().nullish(),
   linked_bl: z.string().nullish(),
   raw_transaction_kind: z.string().describe("original vendor text, unmodified"),
