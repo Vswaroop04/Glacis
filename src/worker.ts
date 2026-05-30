@@ -10,6 +10,7 @@ import {
   getRawEvent, setRawStatus, insertNormalizedEvent, applySnapshot,
   getSnapshot, getTimeline, insertDeadLetter,
 } from "./db.js";
+import { publish } from "./bus.js";
 
 // first attempt uses the cheap fast model; retries escalate to the stronger one
 function modelForAttempt(attempt: number): string {
@@ -77,6 +78,20 @@ async function process(job: Job<NormalizeJob>): Promise<void> {
   }
 
   await setRawStatus(rawEventId, "done");
+
+  publish({
+    type: "processed",
+    rawEventId,
+    at: new Date().toISOString(),
+    eventType: enriched.event.event_type,
+    mode: enriched.event.event_type === "SHIPMENT" ? enriched.event.mode : undefined,
+    entityId: handled.snapshot?.entityId ?? null,
+    state: handled.snapshot?.canonicalState ?? null,
+    confidence,
+    needsReview,
+    enrichmentStatus: enriched.status,
+    model,
+  });
 }
 
 export function startWorker(): Worker<NormalizeJob> {
@@ -99,6 +114,7 @@ export function startWorker(): Worker<NormalizeJob> {
         error: err.message,
         attempts: job.attemptsMade,
       }).catch(() => {});
+      publish({ type: "failed", rawEventId: job.data.rawEventId, at: new Date().toISOString(), error: err.message });
       console.error(`[dlq] ${job.data.rawEventId} after ${job.attemptsMade} attempts: ${err.message}`);
     } else {
       console.warn(`[retry] ${job.data.rawEventId} attempt ${job.attemptsMade}: ${err.message}`);

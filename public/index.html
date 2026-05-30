@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Glacis — webhook console</title>
+<style>
+  :root {
+    --bg: #0c1118; --panel: #131a24; --panel2: #0f151d; --line: #202a38;
+    --ink: #e6edf5; --mut: #8aa0b6; --dim: #5d728a;
+    --accent: #3ad0c8; --accent2: #6aa9ff;
+    --green: #46d39a; --amber: #f2b13c; --blue: #5aa6ff; --red: #ff6b6b; --gray: #6b7c90;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  a { color: var(--accent2); text-decoration: none; }
+
+  header { display: flex; align-items: center; gap: 16px; padding: 14px 22px;
+    border-bottom: 1px solid var(--line); background: linear-gradient(180deg,#101722,#0c1118); }
+  .logo { font-weight: 700; letter-spacing: .5px; font-size: 17px; }
+  .logo span { color: var(--accent); }
+  .sub { color: var(--mut); font-size: 12.5px; }
+  .spacer { flex: 1; }
+  .conn { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--mut); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--gray); box-shadow: 0 0 0 0 rgba(70,211,154,.5); }
+  .dot.live { background: var(--green); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(70,211,154,.45)} 70%{box-shadow:0 0 0 7px rgba(70,211,154,0)} 100%{box-shadow:0 0 0 0 rgba(70,211,154,0)} }
+
+  .metrics { display: flex; gap: 10px; padding: 12px 22px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .metric { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 8px 13px; min-width: 92px; }
+  .metric .k { font-size: 11px; color: var(--mut); text-transform: uppercase; letter-spacing: .4px; }
+  .metric .v { font-size: 19px; font-weight: 650; margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+  main { display: grid; grid-template-columns: 440px 1fr; gap: 0; height: calc(100vh - 116px); }
+  .left { border-right: 1px solid var(--line); padding: 18px 20px; overflow-y: auto; }
+  .right { padding: 18px 20px; overflow-y: auto; }
+  h2 { font-size: 12.5px; text-transform: uppercase; letter-spacing: .6px; color: var(--mut); margin: 0 0 11px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 13px; }
+  .chip { font-size: 12px; padding: 6px 11px; border-radius: 20px; cursor: pointer;
+    background: var(--panel); border: 1px solid var(--line); color: var(--mut); transition: .15s; }
+  .chip:hover { border-color: var(--accent); color: var(--ink); }
+  .chip.sea::before{content:"⚓ "} .chip.air::before{content:"✈ "}
+  .chip.inv::before{content:"₿ "} .chip.adv::before{content:"⚠ "} .chip.bad::before{content:"✕ "}
+
+  textarea { width: 100%; height: 300px; resize: vertical; background: var(--panel2);
+    color: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: 13px;
+    font: 12.5px/1.6 var(--mono); tab-size: 2; }
+  textarea:focus { outline: none; border-color: var(--accent); }
+  .row { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
+  button.send { background: var(--accent); color: #04221f; font-weight: 650; border: 0;
+    padding: 10px 18px; border-radius: 9px; cursor: pointer; font-size: 13.5px; }
+  button.send:hover { filter: brightness(1.08); }
+  button.send:disabled { opacity: .5; cursor: default; }
+  .resp { font: 12px var(--mono); color: var(--mut); }
+  .resp b { color: var(--ink); }
+
+  .feed { display: flex; flex-direction: column; gap: 10px; }
+  .empty { color: var(--dim); font-size: 13px; padding: 30px 0; text-align: center; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 11px;
+    padding: 13px 15px; animation: in .25s ease; }
+  @keyframes in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+  .card .top { display: flex; align-items: center; gap: 10px; }
+  .id { font: 12px var(--mono); color: var(--dim); }
+  .pill { font-size: 11px; font-weight: 650; padding: 3px 9px; border-radius: 20px; letter-spacing: .3px; }
+  .pill.accepted { background: rgba(242,177,60,.16); color: var(--amber); }
+  .pill.processing { background: rgba(90,166,255,.16); color: var(--blue); }
+  .pill.done { background: rgba(70,211,154,.16); color: var(--green); }
+  .pill.duplicate { background: rgba(107,124,144,.18); color: var(--gray); }
+  .pill.failed { background: rgba(255,107,107,.16); color: var(--red); }
+  .meta { display: flex; flex-wrap: wrap; gap: 7px 14px; margin-top: 10px; font-size: 12.5px; }
+  .meta .t { color: var(--mut); }
+  .badge { font: 11px var(--mono); padding: 2px 8px; border-radius: 6px; background: var(--panel2); border: 1px solid var(--line); }
+  .badge.SHIPMENT { color: var(--accent); } .badge.INVOICE { color: var(--amber); } .badge.UNCLASSIFIED { color: var(--gray); }
+  .state { font-weight: 650; }
+  .review { color: var(--amber); font-size: 12px; margin-top: 7px; }
+  .err { color: var(--red); font: 12px var(--mono); margin-top: 8px; }
+  .ent { font: 12px var(--mono); color: var(--accent2); cursor: pointer; }
+  .ent:hover { text-decoration: underline; }
+  .spin { width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--blue);
+    border-radius: 50%; display: inline-block; animation: rot .7s linear infinite; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+
+  .overlay { position: fixed; inset: 0; background: rgba(4,8,12,.6); display: none; align-items: center; justify-content: center; }
+  .overlay.on { display: flex; }
+  .modal { background: var(--panel); border: 1px solid var(--line); border-radius: 13px;
+    width: min(720px, 92vw); max-height: 82vh; overflow: auto; padding: 20px 22px; }
+  .modal h3 { margin: 0 0 4px; font: 600 15px var(--mono); }
+  .modal pre { background: var(--panel2); border: 1px solid var(--line); border-radius: 9px;
+    padding: 13px; font: 12px/1.55 var(--mono); overflow-x: auto; white-space: pre-wrap; }
+  .tl { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0 14px; }
+  .tl .step { background: var(--panel2); border: 1px solid var(--line); border-radius: 7px; padding: 5px 10px; font: 12px var(--mono); }
+  .tl .arr { color: var(--dim); }
+  .route { font: 12.5px var(--mono); color: var(--mut); margin-bottom: 12px; }
+  .x { float: right; cursor: pointer; color: var(--mut); font-size: 18px; }
+</style>
+</head>
+<body>
+  <header>
+    <div>
+      <div class="logo">GL<span>A</span>CIS</div>
+      <div class="sub">webhook ingestion console</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="conn"><span class="dot" id="dot"></span><span id="connText">connecting…</span></div>
+  </header>
+
+  <div class="metrics" id="metrics"></div>
+
+  <main>
+    <section class="left">
+      <h2>Submit a webhook</h2>
+      <div class="chips" id="chips"></div>
+      <textarea id="editor" spellcheck="false"></textarea>
+      <div class="row">
+        <button class="send" id="send">Send webhook</button>
+        <div class="resp" id="resp"></div>
+      </div>
+    </section>
+
+    <section class="right">
+      <h2>Live feed <span style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">— pushed over SSE as the worker finishes</span></h2>
+      <div class="feed" id="feed"><div class="empty">No events yet. Pick a sample on the left and hit send.</div></div>
+    </section>
+  </main>
+
+  <div class="overlay" id="overlay"><div class="modal" id="modal"></div></div>
+
+<script>
+const PRESETS = {
+  "Maersk · in transit": { cls:"sea", body:{ carrier_scac:"MAEU", event_msg_id:"MAEU-EVT-2026-04-22-0001", transport_doc:{type:"MBL",number:"MAEU240498712"}, container:"CSQU3054383", vessel:{name:"MAERSK GUATEMALA",imo:"9778120"}, milestone:"Loaded onboard and sailed", milestone_at:"2026-04-21T22:47:00+08:00", port:{code:"CNSHA",name:"Shanghai"} }},
+  "Maersk · pickup": { cls:"sea", body:{ carrier_scac:"MAEU", event_msg_id:"MAEU-EVT-2026-04-19-0042", transport_doc:{type:"MBL",number:"MAEU240498712"}, container:"CSQU3054383", milestone:"full container received at origin terminal", milestone_at:"2026-04-19T11:15:00+08:00", port:{code:"CNSHA",name:"Shanghai"} }},
+  "ONE · delivered": { cls:"sea", body:{ carrier:"Ocean Network Express", carrier_scac:"ONEY", event_id:"ONE-2026-04-28-114", master_bl:"ONEYMBLHKG260499", container_no:"TLLU2890442", milestone_text:"Cargo released to consignee at consignee facility", milestone_local_time:"28/04/2026 09:42 WIB", port_of_discharge:"IDJKT" }},
+  "Invoice · paid (EUR)": { cls:"inv", body:{ source:"globalfreightpay.api", doc_ref:"GFP-INV-2026-Q2-08821", carrier:"Hapag-Lloyd AG", linked_bl:"HLCU2604OCEAN221", transaction:{kind:"settled in full", settled_at:"2026-04-22 18:47:11+02:00", amount:"EUR 24.350,75", remitter:"ACME Logistics GmbH"} }},
+  "Invoice · issued": { cls:"inv", body:{ source:"globalfreightpay.api", doc_ref:"GFP-INV-2026-Q2-08821", carrier:"Hapag-Lloyd AG", linked_bl:"HLCU2604OCEAN221", transaction:{kind:"freight invoice raised", issued_at:"2026-04-15T09:00:00+02:00", amount:"EUR 24.350,75", due_at:"2026-05-15T00:00:00+02:00"} }},
+  "Air · in transit": { cls:"air", body:{ awb:"020-12345678", flight:"LH8400", carrier:"Lufthansa Cargo", status:"departed origin airport", departure:"2026-04-21T22:00:00+01:00", origin:"FRA", dest:"JFK" }},
+  "Marine advisory": { cls:"adv", body:{ issuer:"marine-traffic-advisory", advisory_id:"MTA-2026-04-26-EU-007", severity:"AMBER", subject:"Congestion at Port of Antwerp-Bruges", body:"Vessel waiting times up to 4-6 days due to labour action." }},
+  "Bad container #": { cls:"bad", body:{ carrier_scac:"ONEY", master_bl:"ONEYTEST999", container_no:"CSQU3054384", milestone_text:"vessel departed", milestone_local_time:"2026-04-22T10:00:00+08:00", port_of_discharge:"SGSIN" }},
+};
+
+const editor = document.getElementById("editor");
+const chips = document.getElementById("chips");
+const feed = document.getElementById("feed");
+const cards = new Map();
+
+Object.entries(PRESETS).forEach(([name, p]) => {
+  const c = document.createElement("div");
+  c.className = "chip " + p.cls;
+  c.textContent = name;
+  c.onclick = () => { editor.value = JSON.stringify(p.body, null, 2); };
+  chips.appendChild(c);
+});
+editor.value = JSON.stringify(PRESETS["Maersk · in transit"].body, null, 2);
+
+document.getElementById("send").onclick = async () => {
+  const resp = document.getElementById("resp");
+  let payload;
+  try { payload = JSON.parse(editor.value); }
+  catch { resp.innerHTML = '<span style="color:var(--red)">invalid JSON</span>'; return; }
+  const t0 = performance.now();
+  try {
+    const r = await fetch("/webhooks", { method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify(payload) });
+    const j = await r.json();
+    const ms = Math.round(performance.now() - t0);
+    resp.innerHTML = `<b>${r.status}</b> ${j.status} · ${ms}ms · <span class="id">${j.id.slice(0,12)}…</span>`;
+    upsert(j.id, j.status === "duplicate" ? "duplicate" : "accepted");
+  } catch (e) { resp.innerHTML = '<span style="color:var(--red)">request failed</span>'; }
+};
+
+function upsert(id, status, data) {
+  if (feed.querySelector(".empty")) feed.innerHTML = "";
+  let card = cards.get(id);
+  if (!card) {
+    card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `<div class="top"><span class="id">${id.slice(0,16)}…</span><span class="pill"></span><span class="proc"></span></div><div class="body"></div>`;
+    feed.prepend(card);
+    cards.set(id, card);
+  }
+  const pill = card.querySelector(".pill");
+  const proc = card.querySelector(".proc");
+  if (status === "accepted") { pill.className = "pill processing"; pill.textContent = "processing"; proc.innerHTML = '<span class="spin"></span>'; }
+  else if (status === "duplicate") { pill.className = "pill duplicate"; pill.textContent = "duplicate"; proc.innerHTML = ""; }
+  else if (status === "processed") {
+    pill.className = "pill done"; pill.textContent = "done"; proc.innerHTML = "";
+    const conf = data.confidence != null ? (data.confidence*100).toFixed(0)+"%" : "—";
+    let h = `<div class="meta">
+      <span><span class="t">type</span> <span class="badge ${data.eventType}">${data.eventType}</span></span>
+      ${data.mode && data.mode!=="UNKNOWN" ? `<span><span class="t">mode</span> ${data.mode}</span>`:""}
+      ${data.state ? `<span><span class="t">state</span> <span class="state">${data.state}</span></span>`:""}
+      <span><span class="t">confidence</span> ${conf}</span>
+      <span><span class="t">enrich</span> ${data.enrichmentStatus||"—"}</span>
+      ${data.entityId ? `<span><span class="t">entity</span> <span class="ent" data-id="${data.entityId}">${data.entityId}</span></span>`:""}
+    </div>`;
+    if (data.needsReview) h += `<div class="review">⚑ flagged for review</div>`;
+    card.querySelector(".body").innerHTML = h;
+    const ent = card.querySelector(".ent");
+    if (ent) ent.onclick = () => openEntity(ent.dataset.id);
+  }
+  else if (status === "failed") {
+    pill.className = "pill failed"; pill.textContent = "failed"; proc.innerHTML = "";
+    card.querySelector(".body").innerHTML = `<div class="err">${(data && data.error)||"processing failed"}</div>`;
+  }
+}
+
+// SSE — the async results land here
+const es = new EventSource("/stream");
+es.onopen = () => { document.getElementById("dot").className = "dot live"; document.getElementById("connText").textContent = "live"; };
+es.onerror = () => { document.getElementById("dot").className = "dot"; document.getElementById("connText").textContent = "reconnecting…"; };
+es.onmessage = (m) => {
+  const e = JSON.parse(m.data);
+  if (e.type === "accepted") { if (!cards.has(e.rawEventId)) upsert(e.rawEventId, "accepted"); }
+  else if (e.type === "processed") upsert(e.rawEventId, "processed", e);
+  else if (e.type === "failed") upsert(e.rawEventId, "failed", e);
+};
+
+// metrics strip
+const METRICS = [["pending","raw_by_status.pending"],["done","raw_by_status.done"],["failed","raw_by_status.failed"],["needs review","needs_review"],["dead letters","dead_letters"],["avg ms","avg_processing_ms"]];
+async function pollMetrics() {
+  try {
+    const m = await (await fetch("/metrics")).json();
+    const get = (p) => p.split(".").reduce((o,k)=> (o==null?null:o[k]), m);
+    document.getElementById("metrics").innerHTML = METRICS.map(([k,p]) => {
+      const v = get(p); return `<div class="metric"><div class="k">${k}</div><div class="v">${v==null?"0":v}</div></div>`;
+    }).join("");
+  } catch {}
+}
+pollMetrics(); setInterval(pollMetrics, 3000);
+
+// entity drill-down
+async function openEntity(id) {
+  const modal = document.getElementById("modal");
+  const overlay = document.getElementById("overlay");
+  modal.innerHTML = `<span class="x" onclick="document.getElementById('overlay').classList.remove('on')">×</span><h3>${id}</h3><div>loading…</div>`;
+  overlay.classList.add("on");
+  try {
+    const o = await (await fetch("/entities/"+encodeURIComponent(id))).json();
+    const s = o.snapshot, r = s.route;
+    const steps = o.timeline.map(t => `<span class="step">${t.canonical_state}</span>`).join('<span class="arr">→</span>');
+    const route = r ? `route: ${r.origin?.name||"?"} → ${r.destination?.name||"?"}  ·  ${r.distance_km??"—"} km (${r.distance_mode})  ·  ${r.transit_days??"—"}d  ·  ETA ${r.eta? r.eta.slice(0,10):"—"}` : "no route";
+    modal.innerHTML = `<span class="x" onclick="document.getElementById('overlay').classList.remove('on')">×</span>
+      <h3>${id}</h3>
+      <div class="route">head: <b style="color:var(--ink)">${s.canonical_state}</b> · ${s.event_count} events · ${s.event_type}</div>
+      <div class="tl">${steps}</div>
+      <div class="route">${route}</div>
+      <pre>${JSON.stringify(o, null, 2)}</pre>`;
+  } catch { modal.querySelector("div").textContent = "failed to load"; }
+}
+document.getElementById("overlay").onclick = (e) => { if (e.target.id === "overlay") e.currentTarget.classList.remove("on"); };
+</script>
+</body>
+</html>

@@ -116,6 +116,8 @@ npm install
 npm start                   # server + worker on :3000
 ```
 
+Open **http://localhost:3000** for a small console: pick a sample payload, send it, and watch the result land in a live feed over Server-Sent Events — it's the clearest way to see the async pipeline, since the card shows up as `processing` the instant you submit and flips to `done` a second or two later when the worker finishes. Or use curl:
+
 ```bash
 curl -X POST localhost:3000/webhooks -H 'content-type: application/json' \
   -d '{"carrier_scac":"MAEU","transport_doc":{"number":"MAEU240498712"},
