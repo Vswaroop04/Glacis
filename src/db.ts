@@ -73,6 +73,17 @@ ALTER TABLE normalized_events ADD COLUMN IF NOT EXISTS prompt_version TEXT;
 ALTER TABLE entity_snapshots ADD COLUMN IF NOT EXISTS has_open_exception BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE entity_snapshots ADD COLUMN IF NOT EXISTS open_exception_reason TEXT;
 
+-- one snapshot table serves both types, but the DB still enforces that the state
+-- vocabulary matches the type — an invoice state can never land in a shipment row
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_snapshot_state') THEN
+    ALTER TABLE entity_snapshots ADD CONSTRAINT chk_snapshot_state CHECK (
+      (event_type = 'SHIPMENT' AND canonical_state IN ('PICKED_UP','IN_TRANSIT','OUT_FOR_DELIVERY','DELIVERED'))
+      OR (event_type = 'INVOICE' AND canonical_state IN ('ISSUED','PAID','VOIDED','REFUNDED'))
+    );
+  END IF;
+END $$;
+
 -- events the system is not sure about, surfaced for a human to check
 CREATE TABLE IF NOT EXISTS review_queue (
   id           BIGSERIAL PRIMARY KEY,
