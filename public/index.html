@@ -57,6 +57,24 @@
   .resp { font: 12px var(--mono); color: var(--mut); }
   .resp b { color: var(--ink); }
 
+  .tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+  .tab { background: none; border: 0; color: var(--mut); padding: 9px 13px; cursor: pointer;
+    font-size: 13px; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tab:hover { color: var(--ink); }
+  .tab.active { color: var(--ink); border-bottom-color: var(--accent); }
+  .count { display: inline-block; min-width: 17px; text-align: center; font-size: 11px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 0 5px; margin-left: 3px; }
+  .count.hot { background: rgba(242,177,60,.16); color: var(--amber); border-color: transparent; }
+  .count.bad { background: rgba(255,107,107,.16); color: var(--red); border-color: transparent; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  .qrow { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 11px 14px; margin-bottom: 9px; }
+  .qrow .qtop { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+  .qrow .ent2 { font: 12.5px var(--mono); color: var(--accent2); cursor: pointer; }
+  .qrow .ent2:hover { text-decoration: underline; }
+  .reason { font: 11px var(--mono); padding: 2px 8px; border-radius: 6px; background: rgba(242,177,60,.16); color: var(--amber); }
+  .reason.dlq { background: rgba(255,107,107,.16); color: var(--red); }
+  .qmeta { color: var(--mut); font-size: 12px; margin-top: 6px; }
   .feed { display: flex; flex-direction: column; gap: 10px; }
   .empty { color: var(--dim); font-size: 13px; padding: 30px 0; text-align: center; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 11px;
@@ -121,8 +139,19 @@
     </section>
 
     <section class="right">
-      <h2>Live feed <span style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">— pushed over SSE as the worker finishes</span></h2>
-      <div class="feed" id="feed"><div class="empty">No events yet. Pick a sample on the left and hit send.</div></div>
+      <div class="tabs" id="tabs">
+        <button class="tab active" data-tab="feed">Live feed</button>
+        <button class="tab" data-tab="review">Review queue <span class="count" id="c-review">0</span></button>
+        <button class="tab" data-tab="exceptions">Exceptions <span class="count" id="c-exceptions">0</span></button>
+        <button class="tab" data-tab="dlq">Dead letters <span class="count" id="c-dlq">0</span></button>
+      </div>
+
+      <div class="panel active" id="panel-feed">
+        <div class="feed" id="feed"><div class="empty">No events yet. Pick a sample on the left and hit send.</div></div>
+      </div>
+      <div class="panel" id="panel-review"><div class="empty">loading…</div></div>
+      <div class="panel" id="panel-exceptions"><div class="empty">loading…</div></div>
+      <div class="panel" id="panel-dlq"><div class="empty">loading…</div></div>
     </section>
   </main>
 
@@ -213,9 +242,52 @@ es.onerror = () => { document.getElementById("dot").className = "dot"; document.
 es.onmessage = (m) => {
   const e = JSON.parse(m.data);
   if (e.type === "accepted") { if (!cards.has(e.rawEventId)) upsert(e.rawEventId, "accepted"); }
-  else if (e.type === "processed") upsert(e.rawEventId, "processed", e);
-  else if (e.type === "failed") upsert(e.rawEventId, "failed", e);
+  else if (e.type === "processed") { upsert(e.rawEventId, "processed", e); refreshQueues(); }
+  else if (e.type === "failed") { upsert(e.rawEventId, "failed", e); refreshQueues(); }
 };
+
+// tabs + the three operational queues
+let activeTab = "feed";
+document.querySelectorAll(".tab").forEach((t) => t.onclick = () => switchTab(t.dataset.tab));
+function switchTab(name) {
+  activeTab = name;
+  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
+  document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("active", p.id === "panel-" + name));
+  refreshQueues();
+}
+function setCount(name, n, cls) {
+  const el = document.getElementById("c-" + name);
+  el.textContent = n;
+  el.className = "count" + (n > 0 ? " " + cls : "");
+}
+function entLink(id) { return id ? `<span class="ent2" onclick="openEntity('${id}')">${id}</span>` : '<span class="qmeta">—</span>'; }
+function rows(arr, fn, emptyMsg) { return arr.length ? arr.map(fn).join("") : `<div class="empty">${emptyMsg}</div>`; }
+
+async function refreshQueues() {
+  try {
+    const [rev, exc, dlq] = await Promise.all([
+      (await fetch("/review-queue")).json(),
+      (await fetch("/exceptions")).json(),
+      (await fetch("/dead-letters")).json(),
+    ]);
+    setCount("review", rev.review_queue.length, "hot");
+    setCount("exceptions", exc.open_exceptions.length, "hot");
+    setCount("dlq", dlq.dead_letters.length, "bad");
+
+    if (activeTab === "review")
+      document.getElementById("panel-review").innerHTML = rows(rev.review_queue,
+        (r) => `<div class="qrow"><div class="qtop">${entLink(r.entity_id)}<span class="reason">${r.reason}</span></div><div class="qmeta">confidence ${r.confidence == null ? "—" : (r.confidence*100).toFixed(0)+"%"} · ${new Date(r.created_at).toLocaleTimeString()}</div></div>`,
+        "Nothing needs review — the system was confident about everything.");
+    if (activeTab === "exceptions")
+      document.getElementById("panel-exceptions").innerHTML = rows(exc.open_exceptions,
+        (r) => `<div class="qrow"><div class="qtop">${entLink(r.entity_id)}<span class="reason">⚠ ${r.open_exception_reason || "exception"}</span></div><div class="qmeta">held at ${r.canonical_state} · since ${new Date(r.last_event_timestamp).toLocaleDateString()}</div></div>`,
+        "No shipments are currently on hold.");
+    if (activeTab === "dlq")
+      document.getElementById("panel-dlq").innerHTML = rows(dlq.dead_letters,
+        (r) => `<div class="qrow"><div class="qtop"><span class="id">${(r.raw_event_id||"").slice(0,16)}…</span><span class="reason dlq">${r.attempts} attempts</span></div><div class="qmeta">${(r.error||"").slice(0,90)}</div></div>`,
+        "No failed events — nothing has exhausted its retries.");
+  } catch {}
+}
 
 // metrics strip
 const METRICS = [["pending","raw_by_status.pending"],["done","raw_by_status.done"],["failed","raw_by_status.failed"],["needs review","needs_review"],["dead letters","dead_letters"],["avg ms","avg_processing_ms"]];
@@ -229,6 +301,7 @@ async function pollMetrics() {
   } catch {}
 }
 pollMetrics(); setInterval(pollMetrics, 3000);
+refreshQueues(); setInterval(refreshQueues, 4000);
 
 // entity drill-down
 async function openEntity(id) {
