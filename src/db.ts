@@ -64,6 +64,21 @@ CREATE TABLE IF NOT EXISTS dead_letters (
   attempts     INTEGER     NOT NULL,
   failed_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- provenance for reprocessing: which prompt + the model's own (untrusted) score
+ALTER TABLE normalized_events ADD COLUMN IF NOT EXISTS model_confidence REAL;
+ALTER TABLE normalized_events ADD COLUMN IF NOT EXISTS prompt_version TEXT;
+
+-- events the system is not sure about, surfaced for a human to check
+CREATE TABLE IF NOT EXISTS review_queue (
+  id           BIGSERIAL PRIMARY KEY,
+  raw_event_id TEXT REFERENCES raw_events(id),
+  entity_id    TEXT,
+  reason       TEXT        NOT NULL,
+  confidence   REAL,
+  resolved     BOOLEAN     NOT NULL DEFAULT false,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `.replace("BIGGSERIAL", "BIGSERIAL");
 
 export async function migrate(): Promise<void> {
@@ -106,8 +121,10 @@ export async function setRawStatus(id: string, status: string): Promise<void> {
 export interface NormalizedInput {
   rawEventId: string;
   event: NormalizedEvent;
-  confidence: number | null;
+  confidence: number | null;       // computed confidence (authoritative)
+  modelConfidence: number | null;  // the model's own self-report
   model: string;
+  promptVersion: string;
   enrichmentStatus: string;
   needsReview: boolean;
 }
@@ -120,14 +137,35 @@ export async function insertNormalizedEvent(n: NormalizedInput): Promise<void> {
   await pool.query(
     `INSERT INTO normalized_events
        (raw_event_id, event_type, entity_id, canonical_state, event_timestamp,
-        payload, confidence, model, enrichment_status, needs_review)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        payload, confidence, model_confidence, model, prompt_version, enrichment_status, needs_review)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
      ON CONFLICT (raw_event_id) DO NOTHING`,
     [
       n.rawEventId, n.event.event_type, entityId, state, ts,
-      JSON.stringify(n.event), n.confidence, n.model, n.enrichmentStatus, n.needsReview,
+      JSON.stringify(n.event), n.confidence, n.modelConfidence, n.model, n.promptVersion,
+      n.enrichmentStatus, n.needsReview,
     ],
   );
+}
+
+export async function insertReview(r: {
+  rawEventId: string;
+  entityId: string | null;
+  reason: string;
+  confidence: number | null;
+}): Promise<void> {
+  await pool.query(
+    `INSERT INTO review_queue (raw_event_id, entity_id, reason, confidence)
+     VALUES ($1, $2, $3, $4)`,
+    [r.rawEventId, r.entityId, r.reason, r.confidence],
+  );
+}
+
+export async function listReviewQueue(limit = 100) {
+  const res = await pool.query(
+    `SELECT * FROM review_queue WHERE NOT resolved ORDER BY created_at DESC LIMIT $1`, [limit],
+  );
+  return res.rows;
 }
 
 /**

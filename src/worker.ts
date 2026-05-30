@@ -2,13 +2,15 @@ import { Worker, type Job } from "bullmq";
 import { config } from "./config.js";
 import { connection, type NormalizeJob } from "./queue.js";
 import { normalize } from "./normalize.js";
+import { PROMPT_VERSION } from "./prompt.js";
 import { handle } from "./handlers/index.js";
-import { evaluateTransition, isAnomalous } from "./state-machine.js";
+import { evaluateTransition, type TransitionVerdict } from "./state-machine.js";
+import { computeConfidence, reviewReasons } from "./confidence.js";
 import { geoProvider } from "./geo/live.js";
 import { enrichEvent, assembleRoute, type RouteLeg } from "./geo/enrich.js";
 import {
   getRawEvent, setRawStatus, insertNormalizedEvent, applySnapshot,
-  getSnapshot, getTimeline, insertDeadLetter,
+  getSnapshot, getTimeline, insertDeadLetter, insertReview,
 } from "./db.js";
 import { publish } from "./bus.js";
 
@@ -26,34 +28,48 @@ async function process(job: Job<NormalizeJob>): Promise<void> {
   await setRawStatus(rawEventId, "processing");
 
   const model = modelForAttempt(job.attemptsMade);
-  const { event, confidence } = await normalize(raw.payload, model);
+  const { event, confidence: modelConfidence } = await normalize(raw.payload, model);
 
   // shape the record and decide if it advances an entity's lifecycle
   const handled = handle(event);
 
-  let needsReview = confidence != null && confidence < config.reviewConfidenceThreshold;
-
   // deterministic + geo enrichment (best-effort; never fails the job)
   const enriched = await enrichEvent(handled.event, geoProvider);
-  // a container number that fails its ISO 6346 check digit is likely corrupted
-  if (enriched.containerValid === false) needsReview = true;
 
+  // evaluate the lifecycle transition (only when this event belongs to an entity)
+  let verdict: TransitionVerdict | null = null;
   if (handled.snapshot) {
     const snap = await getSnapshot(handled.snapshot.entityId);
-    const verdict = evaluateTransition({
+    verdict = evaluateTransition({
       eventType: handled.snapshot.eventType,
       currentState: snap?.canonical_state ?? null,
       currentTimestamp: snap?.last_event_timestamp ? new Date(snap.last_event_timestamp).toISOString() : null,
       incomingState: handled.snapshot.canonicalState,
       incomingTimestamp: handled.snapshot.eventTimestamp,
     });
-    if (isAnomalous(verdict)) needsReview = true;
+  }
 
-    await insertNormalizedEvent({
-      rawEventId, event: enriched.event, confidence,
-      model, enrichmentStatus: enriched.status, needsReview,
+  // confidence we compute ourselves from verifiable signals, not the model's word
+  const confInputs = { event: enriched.event, modelConfidence, verdict, enrichmentStatus: enriched.status, containerValid: enriched.containerValid };
+  const confidence = computeConfidence(confInputs);
+  const reasons = reviewReasons(confInputs, confidence, config.reviewConfidenceThreshold);
+  const needsReview = reasons.length > 0;
+
+  await insertNormalizedEvent({
+    rawEventId, event: enriched.event, confidence, modelConfidence,
+    model, promptVersion: PROMPT_VERSION, enrichmentStatus: enriched.status, needsReview,
+  });
+
+  if (needsReview) {
+    await insertReview({
+      rawEventId,
+      entityId: handled.snapshot?.entityId ?? null,
+      reason: reasons.join("+"),
+      confidence,
     });
+  }
 
+  if (handled.snapshot) {
     // rebuild the route from the entity's full located history (out-of-order safe)
     const timeline = await getTimeline(handled.snapshot.entityId);
     const legs: RouteLeg[] = timeline.map((t) => {
@@ -69,11 +85,6 @@ async function process(job: Job<NormalizeJob>): Promise<void> {
       canonicalState: handled.snapshot.canonicalState,
       eventTimestamp: handled.snapshot.eventTimestamp,
       route,
-    });
-  } else {
-    await insertNormalizedEvent({
-      rawEventId, event: enriched.event, confidence,
-      model, enrichmentStatus: enriched.status, needsReview,
     });
   }
 

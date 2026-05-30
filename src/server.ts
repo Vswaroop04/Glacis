@@ -5,7 +5,7 @@ import { enqueueNormalize } from "./queue.js";
 import { publish, subscribe } from "./bus.js";
 import {
   insertRawEvent, getRawEvent, getSnapshot, getTimeline,
-  listDeadLetters, metrics,
+  listDeadLetters, listReviewQueue, metrics,
 } from "./db.js";
 
 const INDEX_HTML = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
@@ -82,6 +82,9 @@ export function buildServer(): FastifyInstance {
 
   // Dead-letter queue: events that exhausted retries, for inspection / replay.
   app.get("/dead-letters", async () => ({ dead_letters: await listDeadLetters() }));
+
+  // Human review queue: events the system wasn't confident about.
+  app.get("/review-queue", async () => ({ review_queue: await listReviewQueue() }));
 
   // Operational metrics.
   app.get("/metrics", async () => await metrics());

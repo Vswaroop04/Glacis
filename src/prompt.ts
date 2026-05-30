@@ -1,3 +1,8 @@
+// Bump when the prompt changes. Stored with every normalized event so outputs
+// can be traced to the exact prompt that produced them, and so historical events
+// can be reprocessed when the prompt improves.
+export const PROMPT_VERSION = "2026-05-30.1";
+
 export const SYSTEM_PROMPT = `You are a logistics data normalization engine for a global supply chain platform.
 
 You receive arbitrary JSON webhook payloads from external logistics and financial vendors.
