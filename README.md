@@ -51,7 +51,15 @@ On top of the timestamp guard there's a small state machine ([`src/state-machine
 
 ## Not trusting the model blindly
 
-The model output goes through a Zod schema gate before it's allowed anywhere near storage. If it doesn't parse, it throws, and that becomes a retry and the retry is where the model escalates from Haiku to Sonnet. The model also returns a confidence score; anything under threshold gets flagged for review rather than silently accepted.
+The model output goes through a Zod schema gate before it's allowed anywhere near storage. If it doesn't parse, it throws, and that becomes a retry and the retry is where the model escalates from Haiku to Sonnet.
+
+The model also returns a confidence score, and this is the one place I'd push back on my own first instinct: I don't trust a model's self-reported confidence. It has no idea whether the fields it just made up are right — it'll tell you it's 0.98 sure of a hallucinated invoice number. So I compute my own confidence ([`src/confidence.ts`](src/confidence.ts)) from things I can actually verify: did every required field come back, was the state transition legal, did enrichment succeed, did the container number pass its check digit. The model's number is one input with a low weight, not the answer. Both are stored — the computed one is what decisions use, the model's own is kept for comparison.
+
+Anything the system isn't sure about goes into a `review_queue` with a concrete reason: `INVALID_TRANSITION`, `INVALID_CONTAINER`, `ENRICHMENT_FAILED`, or `LOW_CONFIDENCE`. The reasons matter — a bad container check digit flags the event even when its overall score is high, because it's a hard signal, not a soft one. Real logistics operations never fully automate this; there's always a human looking at the uncertain cases, and this is the queue they'd work from (`GET /review-queue`).
+
+## Measuring whether normalization is actually correct
+
+Benchmarking models tells you which is fast and cheap. It doesn't tell you whether the output is *right*, so I wrote a second eval for that ([`benchmarks/eval/`](benchmarks/eval/README.md), `npm run eval`). Each fixture is a raw payload with a hand-written expected output, and it scores classification, state mapping, entity extraction, mode, and the field-level extractions *separately* — because a system can classify perfectly and still botch the amount. Latest run is 97.2% overall, and the one miss is a genuinely ambiguous mode call (a courier last-mile that's arguably `PARCEL`, not `ROAD`). I left it failing instead of editing the fixture to hit a fake 100%, because surfacing the ambiguity is the whole point of having the eval. In production this runs in CI so a prompt or model change can't quietly regress accuracy.
 
 ## When things fail
 
@@ -103,7 +111,8 @@ It's event-sourcing in spirit: the raw payload and the event log are immutable, 
 | `GET` | `/webhooks/:id` | processing status of one ingestion |
 | `GET` | `/entities/:id` | an entity's current state plus its full timeline |
 | `GET` | `/entities/:id/route` | resolved origin, destination, distance, ETA |
-| `GET` | `/dead-letters` | failed events |
+| `GET` | `/dead-letters` | events that exhausted retries |
+| `GET` | `/review-queue` | events flagged for a human to check, with reasons |
 | `GET` | `/metrics` | queue counts, review backlog, DLQ size, average processing time |
 | `GET` | `/health` | liveness |
 
@@ -127,16 +136,36 @@ curl -X POST localhost:3000/webhooks -H 'content-type: application/json' \
 curl localhost:3000/entities/MAEU240498712
 ```
 
-`npm run bench:llm` runs the model comparison, `npm run bench:geo` the port geocoding one, and the `scripts/smoke-*.ts` files exercise each piece (db, normalize, state machine, geo, enrich) on their own.
+`npm run eval` checks normalization correctness, `npm run bench:llm` runs the model comparison, `npm run bench:geo` the port geocoding one, and the `scripts/smoke-*.ts` files exercise each piece (db, normalize, state machine, geo, enrich) on their own.
+
+## Why event sourcing matters more for an AI system than a normal one
+
+Keeping the raw payload immutable and the normalized output in a separate append-only log isn't just good hygiene here — it's load-bearing, because normalization is probabilistic. The model I use today will be beaten by a better one next quarter, my prompt will improve, the schema will grow a field. In a normal system that's fine, you move forward. In an AI system it means every event I've ever stored can be *re-normalized* against the better model or prompt, because I never threw away the original. The raw table plus the `prompt_version` and model stamped on each event make historical reprocessing a backfill job, not a data-loss problem. That's the real reason event sourcing and AI belong together.
+
+## Where this goes: the model should handle novelty, not every request
+
+Having spent time around supply-chain data, the thing I'd build next is a deterministic fast path in front of the LLM. Vendors send the same handful of payload shapes thousands of times — Maersk's gate-in event looks the same every day. There's no reason to pay for and wait on a model call for a shape I've already normalized correctly a thousand times. The normalized log I'm already keeping is exactly the training data for that: fingerprint the payload structure per vendor, and once a shape has been confirmed enough times, normalize it with deterministic pattern matching and only fall back to the LLM for genuinely new shapes. The model should be spent on novelty, not on the 95% of traffic that's repetitive. That's where the cost curve and the latency curve both bend in the right direction.
 
 ## What I'd do before calling it production
 
 - Swap BullMQ for Kafka or Temporal once volume and replay guarantees matter.
 - Replace the sea-lane approximation with a real sea-route distance provider, and the small LOCODE table with a full UN/LOCODE / World Port Index dataset.
-- Promote the benchmark into CI so a prompt or model change can't regress accuracy without failing a build.
-- Build the review queue into an actual UI — right now low-confidence and anomalous events are flagged in the data but nobody's looking at them.
-- Add tracing across ingest → queue → model → store, and per-model accuracy dashboards.
+- Run the eval (`npm run eval`) in CI against a growing golden set so a prompt or model change can't regress accuracy without failing a build.
+- Build the review queue into an actual UI — the uncertain events are flagged and queued, but a human still needs a screen to work them from.
+- Add a circuit breaker around the model: if the LLM error rate crosses a threshold, open the circuit and let events sit in the queue instead of burning through retries into the dead-letter table, then resume when it recovers. The queue already makes this safe — nothing is lost while the circuit is open.
+- Add the deterministic fast path described above, and tracing across ingest → queue → model → store with per-model accuracy dashboards.
+
+## What I intentionally did NOT build
+
+Restraint felt like part of the assignment, so a few things I deliberately left out:
+
+- **An agent / multi-agent orchestration for normalization.** It's a single bounded extraction; an agent loop would add latency, cost, and failure modes for no accuracy gain. The benchmark backs this up.
+- **A workflow framework (Mastra, Temporal) on the hot path.** The guarantees that matter — idempotency, the out-of-order upsert — are domain-specific and I wanted them visible, not delegated to a framework that would also become a second source of truth next to my raw table.
+- **A retrieval/RAG pipeline.** There's nothing to retrieve; normalization is classify-and-extract, not question-answering. Adding a vector store would be complexity cosplay.
+- **Self-reported model confidence as the trust signal.** I computed my own instead, for the reasons above.
+
+Each of these is a reasonable thing to reach for, and on a different problem I would. Here they'd have been features added to look thorough rather than because the problem needed them.
 
 ## Honest about the tradeoffs
 
-Ocean distance is a great-circle approximation, not a true sea route, and it's labelled as such. Confidence is the model's own number, not a calibrated one. The worker runs in the same process as the server for simplicity, though the boundary is clean enough to split out. And air/road are wired but shallow, because I have no sample payloads for them and didn't want to ship code I couldn't test against real data.
+Ocean distance is a great-circle approximation, not a true sea route, and it's labelled as such. The computed confidence is a sensible weighting, not a statistically calibrated probability — good enough to triage review, not something I'd quote as a real likelihood. The worker runs in the same process as the server for simplicity, though the boundary is clean enough to split out. And air/road are wired but shallow, because I have no sample payloads for them and didn't want to ship code I couldn't test against real data.
