@@ -116,14 +116,15 @@ The alternative — a table per type — would mean every "where is entity X?" r
 
 ## The data model
 
-Four tables, kept deliberately separate so nothing is ever lost:
+Five tables, kept deliberately separate so nothing is ever lost:
 
 - `raw_events` — the original payload, untouched, the source of truth
 - `normalized_events` — an append-only log of every normalized event
 - `entity_snapshots` — the current state per entity, derived, rebuildable from the log
+- `review_queue` — events the system wasn't sure about, for a human to check
 - `dead_letters` — whatever exhausted its retries, kept for inspection
 
-It's event-sourcing in spirit: the raw payload and the event log are immutable, and the snapshot is just a projection over them.
+It's event-sourcing in spirit: the raw payload and the event log are immutable, the snapshot is just a projection over them, and the last two are operational side-tables so an uncertain or failed event is never silently dropped.
 
 ## API
 
