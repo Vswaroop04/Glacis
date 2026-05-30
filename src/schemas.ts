@@ -113,24 +113,40 @@ export const NormalizedEventSchema = z.discriminatedUnion("event_type", [
 ]);
 export type NormalizedEvent = z.infer<typeof NormalizedEventSchema>;
 
-// Full persisted record: normalized payload + provenance.
+/**
+ * A row in normalized_events: one processed webhook (the event), plus provenance.
+ * This mirrors the table columns; the normalized event itself lives in `payload`.
+ * confidence is the computed score; model_confidence is the model's self-report.
+ */
 export const NormalizedRecord = z.object({
   raw_event_id: z.string(),                      // = SHA-256 of raw body
-  event: NormalizedEventSchema,
+  event_type: z.enum(["SHIPMENT", "INVOICE", "UNCLASSIFIED"]),
+  entity_id: z.string().nullable(),
+  canonical_state: z.string().nullable(),
+  event_timestamp: z.string().nullable(),
+  payload: NormalizedEventSchema,                // the full normalized event
   confidence: z.number().min(0).max(1).nullable(),
+  model_confidence: z.number().min(0).max(1).nullable(),
   model: z.string(),
+  prompt_version: z.string(),
   enrichment_status: z.enum(["DONE", "PARTIAL", "SKIPPED", "FAILED"]),
-  normalized_at: z.string(),
+  needs_review: z.boolean(),
+  created_at: z.string(),
 });
 export type NormalizedRecord = z.infer<typeof NormalizedRecord>;
 
-// entity snapshot: derived head state
+/**
+ * A row in entity_snapshots: the derived current state of one entity, rolled up
+ * from its normalized events. One per entity, overwritten on each newer event.
+ */
 export const EntitySnapshot = z.object({
   entity_id: z.string(),
   event_type: z.enum(["SHIPMENT", "INVOICE"]),
   canonical_state: z.string(),
   last_event_timestamp: z.string(),              // the out-of-order guard
   route: Route.nullable(),
+  has_open_exception: z.boolean(),
+  open_exception_reason: z.string().nullable(),
   event_count: z.number().int(),
   updated_at: z.string(),
 });
