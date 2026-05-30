@@ -100,6 +100,8 @@ async function process(job: Job<NormalizeJob>): Promise<void> {
     state: handled.snapshot?.canonicalState ?? null,
     confidence,
     needsReview,
+    isException: enriched.event.event_type === "SHIPMENT" ? enriched.event.is_exception : undefined,
+    exceptionReason: enriched.event.event_type === "SHIPMENT" ? enriched.event.exception_reason ?? null : undefined,
     enrichmentStatus: enriched.status,
     model,
   });

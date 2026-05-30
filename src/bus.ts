@@ -14,6 +14,8 @@ export interface PipelineEvent {
   state?: string | null;
   confidence?: number | null;
   needsReview?: boolean;
+  isException?: boolean;
+  exceptionReason?: string | null;
   enrichmentStatus?: string;
   model?: string;
   error?: string;

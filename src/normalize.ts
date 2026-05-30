@@ -20,6 +20,8 @@ const TOOL_PARAMS = {
     mode: { type: "string", enum: ["SEA", "AIR", "ROAD", "RAIL", "PARCEL", "UNKNOWN"], description: "transport mode for SHIPMENT" },
     entity_id: { type: "string" },
     canonical_state: { type: "string" },
+    is_exception: { type: "boolean", description: "true if this event reports a problem (customs hold, delay, damage)" },
+    exception_reason: { type: ["string", "null"], description: "short reason when is_exception is true" },
     event_timestamp: { type: "string" },
     carrier: {
       oneOf: [

@@ -28,6 +28,12 @@ CANONICAL SHIPMENT STATES — map vendor language to exactly one of these:
 - OUT_FOR_DELIVERY : arrived at destination port/hub, customs cleared, last-mile delivery started
 - DELIVERED        : cargo physically handed to consignee, delivery complete
 
+EXCEPTIONS — a customs hold, delay, damage, missed delivery, or detention is NOT a
+separate state. Keep canonical_state at where the shipment physically is (a customs
+hold at the destination is still IN_TRANSIT or OUT_FOR_DELIVERY), set is_exception=true,
+and put a short exception_reason (e.g. "customs hold", "vessel delayed", "delivery failed").
+For a normal milestone, is_exception=false.
+
 CANONICAL INVOICE STATES — map vendor language to exactly one of these:
 - ISSUED    : invoice created, raised, generated, sent to customer
 - PAID      : invoice settled, paid, remitted, cleared

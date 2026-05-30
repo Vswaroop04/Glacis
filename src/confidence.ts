@@ -52,6 +52,8 @@ export function computeConfidence(i: ConfidenceInputs): number {
 export function reviewReasons(i: ConfidenceInputs, computed: number, threshold: number): string[] {
   const reasons: string[] = [];
   if (i.verdict?.kind === "ANOMALY") reasons.push("INVALID_TRANSITION");
+  // a customs hold / delay / damage isn't a state, but someone should look at it
+  if (i.event.event_type === "SHIPMENT" && i.event.is_exception) reasons.push("EXCEPTION");
   if (i.containerValid === false) reasons.push("INVALID_CONTAINER");
   if (i.enrichmentStatus === "FAILED") reasons.push("ENRICHMENT_FAILED");
   if (computed < threshold) reasons.push("LOW_CONFIDENCE");

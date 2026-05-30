@@ -194,6 +194,7 @@ function upsert(id, status, data) {
       <span><span class="t">enrich</span> ${data.enrichmentStatus||"—"}</span>
       ${data.entityId ? `<span><span class="t">entity</span> <span class="ent" data-id="${data.entityId}">${data.entityId}</span></span>`:""}
     </div>`;
+    if (data.isException) h += `<div class="review">⚠ exception${data.exceptionReason ? ": "+data.exceptionReason : ""} — state held at ${data.state}</div>`;
     if (data.needsReview) h += `<div class="review">⚑ flagged for review</div>`;
     card.querySelector(".body").innerHTML = h;
     const ent = card.querySelector(".ent");

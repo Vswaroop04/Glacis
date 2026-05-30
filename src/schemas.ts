@@ -54,6 +54,10 @@ export const ShipmentLLM = z.object({
   mode: TransportMode.catch("UNKNOWN").describe("transport mode: SEA, AIR, ROAD, RAIL, PARCEL"),
   entity_id: z.string().describe("master BL > house BL > AWB > tracking/container number"),
   canonical_state: ShipmentState,
+  // exceptions (customs hold, delay, damage) aren't a separate state — the
+  // shipment is still wherever it was — so they ride alongside canonical_state
+  is_exception: z.boolean().default(false).describe("true if this event reports a problem/exception"),
+  exception_reason: z.string().nullish().describe("short reason if is_exception, e.g. 'customs hold'"),
   event_timestamp: z.string().describe("ISO 8601 UTC"),
   carrier: z.object({ scac: z.string().nullable(), name: z.string().nullable() }),
   container_no: z.string().nullish(),
