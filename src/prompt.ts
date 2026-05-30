@@ -55,6 +55,9 @@ currency    : Extract the ISO 4217 three-letter code (EUR, USD, GBP, SGD ...).
               "Euros" → "EUR". "US Dollars" → "USD". NEVER omit for INVOICE payloads.
 due_date    : For INVOICE, the payment due date as ISO 8601 UTC if the payload has one
               (e.g. due_at, payment_due, net terms date). Use null when genuinely absent.
+consignee/shipper : For SHIPMENT, the receiving and sending parties if named in the payload.
+reference_po: For SHIPMENT, the customer PO or shipper reference (e.g. shipper_ref, po_number).
+secondary_id: For SHIPMENT, the house BL when entity_id is the master BL (keep both).
 event_locode: For SHIPMENT, the UN/LOCODE of where THIS event happened, if present
               (e.g. port of loading for IN_TRANSIT, port of discharge for DELIVERED).
               Extract the code only — do NOT invent coordinates; a downstream service resolves those.
@@ -120,6 +123,10 @@ Correct output:
   "canonical_state": "IN_TRANSIT",
   "event_timestamp": "2026-04-21T14:47:00Z",
   "carrier": {"scac": "MAEU", "name": "Maersk"},
+  "consignee": null,
+  "shipper": null,
+  "reference_po": null,
+  "secondary_id": null,
   "container_no": null,
   "event_locode": "CNSHA",
   "event_location_name": "Shanghai",

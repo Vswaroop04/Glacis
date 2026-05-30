@@ -60,6 +60,11 @@ export const ShipmentLLM = z.object({
   exception_reason: z.string().nullish().describe("short reason if is_exception, e.g. 'customs hold'"),
   event_timestamp: z.string().describe("ISO 8601 UTC"),
   carrier: z.object({ scac: z.string().nullable(), name: z.string().nullable() }),
+  // identity / linking fields — tie a webhook to the customer's order and parties
+  consignee: z.string().nullish().describe("receiving party"),
+  shipper: z.string().nullish().describe("sending party / consignor"),
+  reference_po: z.string().nullish().describe("customer PO or shipper reference"),
+  secondary_id: z.string().nullish().describe("house BL when entity_id is the master BL"),
   container_no: z.string().nullish(),
   vessel: z.object({ name: z.string(), imo: z.string().nullish() }).nullish(),
   event_locode: z.string().nullish().describe("UN/LOCODE of where this event happened"),
