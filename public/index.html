@@ -163,6 +163,40 @@
   <div class="overlay" id="overlay"><div class="modal" id="modal"></div></div>
 
 <script>
+// access gate: one shared token, used as the API token and the UI passcode.
+// if the server has no ACCESS_TOKEN set, requests just succeed and no prompt shows.
+let TOKEN = localStorage.getItem("glacis_token") || "";
+const _fetch = window.fetch.bind(window);
+window.fetch = (url, opts) => {
+  opts = opts || {};
+  if (typeof url === "string" && url.startsWith("/") && TOKEN) {
+    opts.headers = Object.assign({}, opts.headers, { "x-access-token": TOKEN });
+  }
+  return _fetch(url, opts).then((r) => { if (r.status === 401) requirePasscode(); return r; });
+};
+function streamUrl() { return TOKEN ? "/stream?token=" + encodeURIComponent(TOKEN) : "/stream"; }
+function requirePasscode() {
+  if (document.getElementById("gate")) return;
+  const g = document.createElement("div");
+  g.id = "gate"; g.className = "overlay on";
+  g.innerHTML = '<div class="modal" style="width:340px"><h3>Enter passcode</h3>'
+    + '<div class="route">This console is protected.</div>'
+    + '<input id="gate-in" type="password" placeholder="passcode" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--ink);font:13px var(--mono)"/>'
+    + '<div id="gate-err" style="color:var(--red);font-size:12px;margin-top:8px;min-height:14px"></div>'
+    + '<button class="send" id="gate-go" style="margin-top:10px">Unlock</button></div>';
+  document.body.appendChild(g);
+  const go = async () => {
+    const v = document.getElementById("gate-in").value.trim();
+    if (!v) return;
+    const r = await _fetch("/metrics", { headers: { "x-access-token": v } });
+    if (r.ok) { TOKEN = v; localStorage.setItem("glacis_token", v); g.remove(); connectSSE(); pollMetrics(); refreshQueues(); }
+    else document.getElementById("gate-err").textContent = "Wrong passcode";
+  };
+  document.getElementById("gate-go").onclick = go;
+  document.getElementById("gate-in").addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+  document.getElementById("gate-in").focus();
+}
+
 const PRESETS = {
   "Maersk · in transit": { cls:"sea", body:{ carrier_scac:"MAEU", event_msg_id:"MAEU-EVT-2026-04-22-0001", transport_doc:{type:"MBL",number:"MAEU240498712"}, container:"CSQU3054383", vessel:{name:"MAERSK GUATEMALA",imo:"9778120"}, milestone:"Loaded onboard and sailed", milestone_at:"2026-04-21T22:47:00+08:00", port:{code:"CNSHA",name:"Shanghai"} }},
   "Maersk · pickup": { cls:"sea", body:{ carrier_scac:"MAEU", event_msg_id:"MAEU-EVT-2026-04-19-0042", transport_doc:{type:"MBL",number:"MAEU240498712"}, container:"CSQU3054383", milestone:"full container received at origin terminal", milestone_at:"2026-04-19T11:15:00+08:00", port:{code:"CNSHA",name:"Shanghai"} }},
@@ -241,15 +275,21 @@ function upsert(id, status, data) {
 }
 
 // SSE — the async results land here
-const es = new EventSource("/stream");
-es.onopen = () => { document.getElementById("dot").className = "dot live"; document.getElementById("connText").textContent = "live"; };
-es.onerror = () => { document.getElementById("dot").className = "dot"; document.getElementById("connText").textContent = "reconnecting…"; };
-es.onmessage = (m) => {
+let es;
+const onSSEMsg = (m) => {
   const e = JSON.parse(m.data);
   if (e.type === "accepted") { if (!cards.has(e.rawEventId)) upsert(e.rawEventId, "accepted"); }
   else if (e.type === "processed") { upsert(e.rawEventId, "processed", e); refreshQueues(); }
   else if (e.type === "failed") { upsert(e.rawEventId, "failed", e); refreshQueues(); }
 };
+function connectSSE() {
+  try { if (es) es.close(); } catch (_) {}
+  es = new EventSource(streamUrl());
+  es.onopen = () => { document.getElementById("dot").className = "dot live"; document.getElementById("connText").textContent = "live"; };
+  es.onerror = () => { document.getElementById("dot").className = "dot"; document.getElementById("connText").textContent = "reconnecting…"; };
+  es.onmessage = onSSEMsg;
+}
+connectSSE();
 
 // tabs + the three operational queues
 let activeTab = "feed";

@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
+import { config } from "./config.js";
 import { deriveIdentity } from "./ingest.js";
 import { enqueueNormalize } from "./queue.js";
 import { publish, subscribe } from "./bus.js";
@@ -10,8 +11,32 @@ import {
 
 const INDEX_HTML = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
 
+// the token can arrive as a Bearer header, an x-access-token header, or a ?token=
+// query param (EventSource can't set headers, so the query form is needed for SSE)
+function tokenFromRequest(req: FastifyRequest): string | null {
+  const auth = req.headers["authorization"];
+  if (typeof auth === "string" && auth.startsWith("Bearer ")) return auth.slice(7);
+  const hdr = req.headers["x-access-token"];
+  if (typeof hdr === "string") return hdr;
+  const q = (req.query as { token?: string } | undefined)?.token;
+  return typeof q === "string" ? q : null;
+}
+
 export function buildServer(): FastifyInstance {
   const app = Fastify({ logger: true });
+
+  // Shared-secret gate. Off when ACCESS_TOKEN is unset. The page and health check
+  // stay open so the UI can load and show its passcode prompt; everything else
+  // (ingest + all reads + the SSE stream) requires the token.
+  if (config.accessToken) {
+    const open = new Set(["/", "/health"]);
+    app.addHook("onRequest", async (req, reply) => {
+      if (open.has(req.routeOptions?.url ?? req.url.split("?")[0])) return;
+      if (tokenFromRequest(req) !== config.accessToken) {
+        return reply.code(401).send({ error: "unauthorized" });
+      }
+    });
+  }
 
   // the demo UI
   app.get("/", async (_req, reply) => reply.type("text/html").send(INDEX_HTML));

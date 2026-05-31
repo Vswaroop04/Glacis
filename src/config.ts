@@ -8,6 +8,10 @@ export const config = {
   anthropicApiKey: process.env.ANTHROPIC_API_KEY,
   openaiApiKey: process.env.OPENAI_API_KEY,
 
+  // Lightweight shared-secret gate. Doubles as the webhook API token and the UI
+  // passcode. If unset, auth is off (local dev / tests). Set it on the public deploy.
+  accessToken: process.env.ACCESS_TOKEN,
+
   // Tiered model fallback: first attempt is cheap + fast (benchmark: 100% on clean
   // payloads); retries escalate to the most reliable model (benchmark: best on
   // adversarial). Drives down cost without sacrificing the hard-case accuracy.
