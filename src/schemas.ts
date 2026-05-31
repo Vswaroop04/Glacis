@@ -103,6 +103,7 @@ export type UnclassifiedLLM = z.infer<typeof UnclassifiedLLM>;
 // tier 2: enriched, stored and served record
 export const EnrichedShipment = ShipmentLLM.extend({
   event_location: GeoPoint.nullable(),           // enrichment resolves event_locode
+  container_valid: z.boolean().nullable().default(null), // ISO 6346 check digit result
 });
 export type EnrichedShipment = z.infer<typeof EnrichedShipment>;
 

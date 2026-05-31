@@ -33,7 +33,7 @@ export async function enrichEvent(event: NormalizedEvent, provider: GeoProvider)
     const containerValid = e.container_no ? isValidContainerNumber(e.container_no) : null;
 
     const point = await provider.resolve(e.event_locode, e.event_location_name);
-    const enriched: NormalizedEvent = point ? { ...e, event_location: point } : e;
+    const enriched: NormalizedEvent = { ...e, container_valid: containerValid, ...(point ? { event_location: point } : {}) };
     const status: EnrichmentStatus =
       !point || point.source === "UNRESOLVED" ? (point ? "PARTIAL" : "SKIPPED")
       : point.source === "LOCODE_DB" || point.source === "GEOCODER" ? "DONE" : "PARTIAL";

@@ -41,7 +41,9 @@ export function computeConfidence(i: ConfidenceInputs): number {
     : i.verdict.kind === "OUT_OF_ORDER" ? 0.85
     : 1;
   const enrich = i.enrichmentStatus === "FAILED" ? 0.6 : i.enrichmentStatus === "PARTIAL" ? 0.85 : 1;
-  const container = i.containerValid === false ? 0.4 : 1;
+  // a bad container check digit is a soft data-quality signal (real feeds are full
+  // of typo'd container numbers), so it nudges confidence down but never alone forces review
+  const container = i.containerValid === false ? 0.7 : 1;
   const model = i.modelConfidence ?? 0.8;
 
   const score = 0.30 * fields + 0.25 * transition + 0.15 * enrich + 0.10 * container + 0.20 * model;
@@ -54,7 +56,8 @@ export function reviewReasons(i: ConfidenceInputs, computed: number, threshold: 
   if (i.verdict?.kind === "ANOMALY") reasons.push("INVALID_TRANSITION");
   // a customs hold / delay / damage isn't a state, but someone should look at it
   if (i.event.event_type === "SHIPMENT" && i.event.is_exception) reasons.push("EXCEPTION");
-  if (i.containerValid === false) reasons.push("INVALID_CONTAINER");
+  // a bad container check digit is recorded and dents confidence, but isn't a hard
+  // review trigger on its own — it would flood the queue with likely typos
   if (i.enrichmentStatus === "FAILED") reasons.push("ENRICHMENT_FAILED");
   if (computed < threshold) reasons.push("LOW_CONFIDENCE");
   return reasons;
