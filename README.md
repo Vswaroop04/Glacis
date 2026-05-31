@@ -2,6 +2,10 @@
 
 A service that takes webhooks from logistics and finance vendors every one of them shaped differently figures out what each event is, normalizes it into one internal schema with an LLM, and stores it so that duplicates, out-of-order arrivals, and bad data don't corrupt anything.
 
+**Live demo:** https://glacis-production-ae07.up.railway.app/ — open it to send a sample payload and watch the async pipeline land in a live feed.
+
+**Walkthrough video:** https://www.loom.com/share/39d84ffa3f094df6aebe71c2b11395fc
+
 ## How I read the assignment
 
 The first thing I decided was that the LLM part is the easy 20%. Calling a model with a tool schema and getting back clean JSON is close to a solved problem. The brief itself tells you where the real work is it mentions sub-second acknowledgements, vendors resending the same payload, and events arriving out of order. Those three lines are the whole assignment. A `POST → LLM → save` toy meets none of them. So I built around them and treated the model call as one stage in a pipeline rather than the centerpiece.
@@ -160,6 +164,61 @@ curl localhost:3000/entities/MAEU240498712
 ```
 
 `npm run eval` checks normalization correctness, `npm run bench:llm` runs the model comparison, `npm run bench:geo` the port geocoding one, and the `scripts/smoke-*.ts` files exercise each piece (db, normalize, state machine, geo, enrich) on their own.
+
+## Quick test against the live service
+
+No setup needed — these hit the deployed instance. Set a base URL once:
+
+```bash
+BASE=https://glacis-production-ae07.up.railway.app
+```
+
+**1. Ocean shipment** — SCAC + container + a port code, normalized into a `SHIPMENT`:
+
+```bash
+curl -X POST "$BASE/webhooks" -H 'content-type: application/json' \
+  -d '{"carrier_scac":"MAEU","transport_doc":{"number":"MAEU240498712"},
+       "milestone":"Loaded onboard and sailed","milestone_at":"2026-04-21T22:47:00+08:00",
+       "port":{"code":"CNSHA","name":"Shanghai"}}'
+
+curl "$BASE/entities/MAEU240498712"          # current state + full timeline
+curl "$BASE/entities/MAEU240498712/route"     # resolved origin, destination, distance, ETA
+```
+
+**2. A differently-shaped invoice** — European `24.350,75` amount, becomes an `INVOICE`:
+
+```bash
+curl -X POST "$BASE/webhooks" -H 'content-type: application/json' \
+  -d '{"source":"globalfreightpay.api","channel":"carrier_billing","doc_ref":"GFP-INV-2026-Q2-08821",
+       "carrier":"Hapag-Lloyd AG","linked_bl":"HLCU2604OCEAN221",
+       "transaction":{"kind":"freight invoice raised","issued_at":"2026-04-15T09:00:00+02:00",
+       "amount":"EUR 24.350,75","due_at":"2026-05-15T00:00:00+02:00"}}'
+```
+
+**3. An exception** — a customs/congestion hold; keeps its state but gets flagged for review:
+
+```bash
+curl -X POST "$BASE/webhooks" -H 'content-type: application/json' \
+  -d '{"carrier_scac":"MAEU","transport_doc":{"type":"MBL","number":"MAEU240498712"},
+       "container":"MSKU7748112","milestone":"Vessel held at anchorage awaiting berth — delayed due to port congestion",
+       "milestone_at":"2026-04-25T06:00:00+08:00","port":{"code":"CNSHA","name":"Shanghai"}}'
+
+curl "$BASE/exceptions"        # shipments currently on an exception
+```
+
+**4. Idempotency** — send any of the above twice; the second returns `200 {"status":"duplicate"}` instead of `202`, and no extra work is queued.
+
+**Inspect the system:**
+
+```bash
+curl "$BASE/entities"        # all current entities (?type=SHIPMENT|INVOICE to filter)
+curl "$BASE/review-queue"    # events flagged for a human, with reasons
+curl "$BASE/dead-letters"    # events that exhausted retries
+curl "$BASE/metrics"         # queue counts, review backlog, DLQ size, avg processing time
+curl "$BASE/health"          # liveness
+```
+
+The `POST` returns immediately with `202` and an `x-webhook-id`; normalization happens in the background, so give it a second before fetching the entity. (For a local run, just swap `$BASE` for `localhost:3000`.)
 
 ## Why event sourcing matters more for an AI system than a normal one
 
