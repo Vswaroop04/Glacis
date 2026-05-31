@@ -141,6 +141,7 @@
     <section class="right">
       <div class="tabs" id="tabs">
         <button class="tab active" data-tab="feed">Live feed</button>
+        <button class="tab" data-tab="entities">Entities <span class="count" id="c-entities">0</span></button>
         <button class="tab" data-tab="review">Review queue <span class="count" id="c-review">0</span></button>
         <button class="tab" data-tab="exceptions">Exceptions <span class="count" id="c-exceptions">0</span></button>
         <button class="tab" data-tab="dlq">Dead letters <span class="count" id="c-dlq">0</span></button>
@@ -149,6 +150,7 @@
       <div class="panel active" id="panel-feed">
         <div class="feed" id="feed"><div class="empty">No events yet. Pick a sample on the left and hit send.</div></div>
       </div>
+      <div class="panel" id="panel-entities"><div class="empty">loading…</div></div>
       <div class="panel" id="panel-review"><div class="empty">loading…</div></div>
       <div class="panel" id="panel-exceptions"><div class="empty">loading…</div></div>
       <div class="panel" id="panel-dlq"><div class="empty">loading…</div></div>
@@ -265,14 +267,21 @@ function rows(arr, fn, emptyMsg) { return arr.length ? arr.map(fn).join("") : `<
 
 async function refreshQueues() {
   try {
-    const [rev, exc, dlq] = await Promise.all([
+    const [ent, rev, exc, dlq] = await Promise.all([
+      (await fetch("/entities")).json(),
       (await fetch("/review-queue")).json(),
       (await fetch("/exceptions")).json(),
       (await fetch("/dead-letters")).json(),
     ]);
+    setCount("entities", ent.entities.length, "ok");
     setCount("review", rev.review_queue.length, "hot");
     setCount("exceptions", exc.open_exceptions.length, "hot");
     setCount("dlq", dlq.dead_letters.length, "bad");
+
+    if (activeTab === "entities")
+      document.getElementById("panel-entities").innerHTML = rows(ent.entities,
+        (e) => `<div class="qrow"><div class="qtop">${entLink(e.entity_id)}<span class="reason ${e.event_type==='INVOICE'?'inv':'shp'}">${e.event_type} · ${e.canonical_state}</span></div><div class="qmeta">${e.event_count} event${e.event_count==1?'':'s'}${e.has_open_exception?' · ⚠ '+(e.open_exception_reason||'exception'):''} · updated ${new Date(e.updated_at).toLocaleTimeString()}</div></div>`,
+        "No entities yet — send a shipment or invoice on the left.");
 
     if (activeTab === "review")
       document.getElementById("panel-review").innerHTML = rows(rev.review_queue,

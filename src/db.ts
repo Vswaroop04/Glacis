@@ -248,6 +248,17 @@ export async function getSnapshot(entityId: string) {
   return res.rows[0] ?? null;
 }
 
+// list current entities (snapshots), newest activity first, optionally by type
+export async function listEntities(eventType: string | null, limit = 200) {
+  const res = eventType
+    ? await pool.query(
+        `SELECT * FROM entity_snapshots WHERE event_type = $1 ORDER BY updated_at DESC LIMIT $2`,
+        [eventType, limit],
+      )
+    : await pool.query(`SELECT * FROM entity_snapshots ORDER BY updated_at DESC LIMIT $1`, [limit]);
+  return res.rows;
+}
+
 export async function getTimeline(entityId: string) {
   const res = await pool.query(
     `SELECT event_type, canonical_state, event_timestamp, confidence, model,

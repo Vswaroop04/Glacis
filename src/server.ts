@@ -5,7 +5,7 @@ import { enqueueNormalize } from "./queue.js";
 import { publish, subscribe } from "./bus.js";
 import {
   insertRawEvent, getRawEvent, getSnapshot, getTimeline,
-  listDeadLetters, listReviewQueue, listOpenExceptions, metrics,
+  listEntities, listDeadLetters, listReviewQueue, listOpenExceptions, metrics,
 } from "./db.js";
 
 const INDEX_HTML = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
@@ -63,6 +63,12 @@ export function buildServer(): FastifyInstance {
     const raw = await getRawEvent(req.params.id);
     if (!raw) return reply.code(404).send({ error: "not found" });
     return { id: raw.id, status: raw.status, vendor: raw.vendor, received_at: raw.received_at };
+  });
+
+  // List current entities (snapshots), optionally filtered by ?type=SHIPMENT|INVOICE.
+  app.get<{ Querystring: { type?: string } }>("/entities", async (req) => {
+    const type = req.query.type === "SHIPMENT" || req.query.type === "INVOICE" ? req.query.type : null;
+    return { entities: await listEntities(type) };
   });
 
   // Current state of an entity plus its full event timeline (ordered by event time).
