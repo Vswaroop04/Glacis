@@ -7,7 +7,7 @@ const shipment = {
   event_type: "SHIPMENT", mode: "SEA", entity_id: "MAEU240498712", canonical_state: "IN_TRANSIT",
   is_exception: false, event_timestamp: "2026-04-21T14:47:00Z", carrier: { scac: "MAEU", name: "Maersk" },
   container_no: null, event_locode: "CNSHA", event_location_name: "Shanghai",
-  event_location: null, raw_milestone_text: "sailed",
+  event_location: null, container_valid: null, raw_milestone_text: "sailed",
 } satisfies NormalizedEvent;
 
 async function main() {

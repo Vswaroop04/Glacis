@@ -21,7 +21,7 @@ export interface HandlerResult {
 
 function handleShipment(s: ShipmentLLM): HandlerResult {
   // event_location is filled in later by the geo enrichment stage
-  const event: NormalizedEvent = { ...s, event_location: null };
+  const event: NormalizedEvent = { ...s, event_location: null, container_valid: null };
   return {
     event,
     snapshot: {

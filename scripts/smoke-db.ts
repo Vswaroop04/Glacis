@@ -18,14 +18,14 @@ async function main() {
     is_exception: false, event_timestamp: "2026-04-28T02:42:00Z",
     carrier: { scac: "MAEU", name: "Maersk" }, container_no: null,
     event_locode: "IDJKT", event_location_name: "Jakarta",
-    event_location: null, raw_milestone_text: "delivered",
+    event_location: null, container_valid: null, raw_milestone_text: "delivered",
   } satisfies NormalizedEvent;
   const pickedUp = {
     event_type: "SHIPMENT", mode: "SEA", entity_id: entity, canonical_state: "PICKED_UP",
     is_exception: false, event_timestamp: "2026-04-19T03:15:00Z",
     carrier: { scac: "MAEU", name: "Maersk" }, container_no: null,
     event_locode: "CNSHA", event_location_name: "Shanghai",
-    event_location: null, raw_milestone_text: "gate in",
+    event_location: null, container_valid: null, raw_milestone_text: "gate in",
   } satisfies NormalizedEvent;
 
   await insertNormalizedEvent({ rawEventId: id1, event: delivered, confidence: 0.97, modelConfidence: 0.97, model: "test", promptVersion: "test", enrichmentStatus: "SKIPPED", needsReview: false });
