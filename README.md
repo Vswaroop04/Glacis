@@ -21,12 +21,28 @@ That told me two useful things. Haiku 4.5 gets 100% on the clean payloads at low
 The single most important decision is that the LLM never runs on the request path. When a webhook comes in, I hash it, write the raw event to Postgres, drop a job on a queue, and return `202` measured at around 15ms. Everything else happens in a background worker.
 
 ```
-POST /webhooks ─► hash ─► save raw ─► enqueue ─► 202   (~15ms, no LLM here)
-                                          │
-                                     (BullMQ / Redis)
-                                          ▼
-   worker: normalize ─► validate ─► route to handler ─► check state transition
-           ─► enrich (geo, carrier, container, ETA) ─► save event + snapshot
+                          INSTANT LANE (synchronous, ~15ms — no LLM)
+  vendor ──POST /webhooks──►  Fastify
+                               │  1. hash body (SHA-256) = idempotency key
+                               │  2. INSERT raw_events  (ON CONFLICT DO NOTHING)
+                               │  3. enqueue job (jobId = hash)
+                               └─ 4. 202 Accepted ─────────────────────────► vendor
+
+                          BACKGROUND LANE (worker, off the hot path)
+  Redis / BullMQ ──job──►  worker pipeline:
+     normalize (LLM: Haiku → Sonnet on retry)
+       └► validate (Zod gate)         ── invalid ──► retry ──► dead_letters
+       └► route to handler (shipment / invoice / unclassified)
+       └► state machine (legal transition? out-of-order? anomaly?)
+       └► enrich (carrier · geo · container check · distance/ETA)  [best-effort]
+       └► compute confidence
+            │
+            ├─► normalized_events   (append-only log, one row per webhook)
+            ├─► entity_snapshots    (current state, timestamp-guarded upsert)
+            ├─► review_queue        (if uncertain / flagged)
+            └─► SSE push ──► browser UI (live)
+
+  Postgres = source of truth   ·   Redis = dispatch only   ·   raw saved BEFORE enqueue
 ```
 
 I went with Postgres for storage and BullMQ on Redis for the queue. The thing I care about there: Postgres is the source of truth, the queue is just dispatch. I write the raw event to Postgres *before* enqueuing, so if Redis falls over I haven't lost a single webhook I can replay from the raw table. A lot of designs put the payload only in the queue and lose it when the queue dies.
@@ -108,6 +124,63 @@ The assignment asks to define a strict internal schema, so here's the one I sett
 
 The `event_type` field is the discriminant: the model picks it during classification, and that decides which of the three shapes the event is validated and stored as. Before that point it's untyped raw JSON; after it, it's exactly one of three strict shapes.
 
+### The fields, and where each one comes from
+
+`L` = produced by the LLM (the fuzzy extraction work). `E` = filled in deterministically by the enrichment stage afterward (so a model can never hallucinate a coordinate or a carrier name).
+
+**SHIPMENT**
+
+| internal field | type | src | notes |
+|---|---|---|---|
+| `event_type` | `"SHIPMENT"` | L | the discriminant |
+| `mode` | `SEA·AIR·ROAD·RAIL·PARCEL·UNKNOWN` | L | drives mode-aware distance/ETA |
+| `entity_id` | string | L | master BL ▸ house BL ▸ AWB ▸ tracking/container |
+| `canonical_state` | `PICKED_UP·IN_TRANSIT·OUT_FOR_DELIVERY·DELIVERED` | L | vendor wording collapsed to the enum |
+| `is_exception` / `exception_reason` | bool / string | L | hold/delay/damage — state stays put, this rides alongside |
+| `event_timestamp` | ISO 8601 UTC | L | all vendor formats/zones normalized to UTC |
+| `carrier` | `{scac, name}` | L+E | name back-filled from SCAC when missing |
+| `container_no` / `container_valid` | string / bool | L+E | ISO 6346 check-digit validated |
+| `consignee` · `shipper` · `reference_po` · `secondary_id` | string | L | parties + PO + the house BL when entity is master |
+| `vessel` | `{name, imo}` | L | |
+| `event_locode` · `event_location_name` | string | L | where this event happened |
+| `event_location` | `{lat,lng,country,source}` | E | resolved from the locode (LOCODE table → geocoder) |
+
+**INVOICE**
+
+| internal field | type | src | notes |
+|---|---|---|---|
+| `event_type` | `"INVOICE"` | L | discriminant |
+| `entity_id` | string | L | the invoice / document reference |
+| `canonical_state` | `ISSUED·PAID·VOIDED·REFUNDED` | L | |
+| `event_timestamp` | ISO 8601 UTC | L | |
+| `amount_cents` | integer | L | `EUR 24.350,75` → `2435075` (never a float) |
+| `currency` | ISO 4217 | L | |
+| `due_date` | ISO 8601 UTC | L | enables overdue tracking |
+| `carrier` · `linked_bl` | string | L | `linked_bl` ties an invoice back to a shipment |
+| `raw_transaction_kind` | string | L | original vendor wording, kept verbatim |
+
+**UNCLASSIFIED** — just `event_type` + `reason`.
+
+Every record is then wrapped with provenance: `confidence` (computed), `model_confidence` (the model's self-report), `model`, `prompt_version`, `enrichment_status`, `needs_review`.
+
+### What this looks like on the real samples
+
+How the appendix payloads' messy vendor fields land in the schema:
+
+| vendor sent (raw) | → internal field | value |
+|---|---|---|
+| `carrier_scac: "MAEU"` | `carrier.scac` (+ `carrier.name`) | `MAEU` → name back-filled `Maersk` |
+| `transport_doc.number` | `entity_id` | `MAEU240498712` |
+| `milestone: "Loaded onboard and sailed"` | `canonical_state` | `IN_TRANSIT` |
+| `milestone_at: "...+08:00"` | `event_timestamp` | converted to `...Z` UTC |
+| `port.code: "CNSHA"` | `event_locode` → `event_location` | resolved to lat/lng |
+| `shipper_ref` | `reference_po` | `ACME-IND-PO-2026-9921` |
+| `house_bl` + `master_bl` (ONE) | `entity_id` = master, `secondary_id` = house | both kept |
+| `milestone_local_time: "28/04/2026 09:42 WIB"` | `event_timestamp` | `WIB` (UTC+7) → UTC |
+| `transaction.kind: "settled in full"` | `canonical_state` | `PAID` |
+| `amount: "EUR 24.350,75"` | `amount_cents` + `currency` | `2435075` + `EUR` |
+| marine advisory (no shipment/invoice) | `event_type` | `UNCLASSIFIED` + reason |
+
 ### Why shipment and invoice events live in the same tables
 
 A deliberate decision worth calling out: both event types are stored **together** — in one `normalized_events` log and one `entity_snapshots` table — rather than in separate per-type tables.
@@ -128,7 +201,25 @@ Five tables, kept deliberately separate so nothing is ever lost:
 - `review_queue` — events the system wasn't sure about, for a human to check
 - `dead_letters` — whatever exhausted its retries, kept for inspection
 
-It's event-sourcing in spirit: the raw payload and the event log are immutable, the snapshot is just a projection over them, and the last two are operational side-tables so an uncertain or failed event is never silently dropped.
+```
+                         ┌──────────────┐
+        POST writes ───► │  raw_events  │  PK id = sha256(body)   (immutable original)
+                         └──────┬───────┘
+            raw_event_id (1:0..1)│  (1:0..*)        (1:0..1)
+              ┌──────────────────┼──────────────────┬───────────────┐
+              ▼                  ▼                   ▼               ▼
+     ┌─────────────────┐  ┌──────────────┐   ┌──────────────┐  (raw_events.status
+     │normalized_events│  │ review_queue │   │ dead_letters │   = pending/processing
+     │  append-only log│  │  uncertain   │   │   failed     │     /done/failed)
+     └────────┬────────┘  └──────────────┘   └──────────────┘
+   entity_id  │  (many:1 — rolls up into)
+              ▼
+     ┌─────────────────┐
+     │ entity_snapshots│  PK entity_id   (current state; a projection of the log)
+     └─────────────────┘
+```
+
+It's event-sourcing in spirit: the raw payload and the event log are immutable, the snapshot is just a projection over them, and the last two are operational side-tables so an uncertain or failed event is never silently dropped. An "entity" isn't its own table — it's the snapshot (current state) plus all `normalized_events` sharing its `entity_id` (full history).
 
 ## API
 
